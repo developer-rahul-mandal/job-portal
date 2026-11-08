@@ -1,0 +1,280 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum JobStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  REJECTED
+  EXPIRED
+  CLOSED
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+}
+
+enum ExperienceLevel {
+  FRESHER
+  EXPERIENCED
+}
+
+enum SalaryPeriod {
+  MONTHLY
+  YEARLY
+  HOURLY
+  NOT_DISCLOSED
+}
+
+enum ApplicationMethod {
+  INTERNAL
+  EXTERNAL
+  EMAIL
+}
+
+enum CompanyVerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum UserRole {
+  APPLICANT
+  RECRUITER
+  ADMIN
+}
+
+enum AuthProvider {
+  EMAIL_OTP
+  GOOGLE
+}
+
+enum OtpPurpose {
+  REGISTER
+  LOGIN
+}
+
+enum CompanyMembershipRole {
+  OWNER
+  ADMIN
+  RECRUITER
+}
+
+enum CompanyMembershipStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  REMOVED
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?   @db.VarChar(150)
+  email           String    @unique @db.VarChar(254)
+  role            UserRole  @default(APPLICANT)
+  isActive        Boolean   @default(true)
+  emailVerifiedAt DateTime?
+
+  accounts           AuthAccount[]
+  sessions           Session[]
+  companyMemberships CompanyRecruiter[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role, isActive])
+}
+
+model AuthAccount {
+  id                String       @id @default(cuid())
+  userId            String
+  provider          AuthProvider
+  providerAccountId String       @db.VarChar(255)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+model EmailOtp {
+  id         String     @id @default(cuid())
+  email      String     @db.VarChar(254)
+  otpHash    String     @db.VarChar(255)
+  purpose    OtpPurpose
+  expiresAt  DateTime
+  attempts   Int        @default(0)
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([email, purpose, expiresAt])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(255)
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model OtpRateLimit {
+  id          String   @id @default(cuid())
+  key         String   @unique @db.VarChar(255)
+  hits        Int      @default(0)
+  windowStart DateTime
+  updatedAt   DateTime @updatedAt
+
+  @@index([windowStart])
+}
+
+model Category {
+  id          String  @id @default(cuid())
+  name        String  @unique @db.VarChar(100)
+  slug        String  @unique @db.VarChar(120)
+  description String? @db.VarChar(300)
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  jobs Job[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+model Company {
+  id            String                    @id @default(cuid())
+  name          String                    @db.VarChar(150)
+  slug          String                    @unique @db.VarChar(180)
+  overview      String?                   @db.VarChar(300)
+  industry      String?                   @db.VarChar(100)
+  logo          String?                   @db.VarChar(500)
+  website       String?                   @db.VarChar(500)
+  officialEmail String?                   @db.VarChar(254)
+  location      String?                   @db.VarChar(150)
+  verification  CompanyVerificationStatus @default(UNVERIFIED)
+  rating        Decimal?                  @db.Decimal(2, 1)
+
+  jobs       Job[]
+  recruiters CompanyRecruiter[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([verification])
+}
+
+model CompanyRecruiter {
+  id             String                  @id @default(cuid())
+  userId         String
+  companyId      String
+  membershipRole CompanyMembershipRole   @default(RECRUITER)
+  status         CompanyMembershipStatus @default(PENDING)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, companyId])
+  @@index([companyId, status])
+  @@index([userId, status])
+}
+
+model Job {
+  id               String          @id @default(cuid())
+  slug             String          @unique @db.VarChar(180)
+  title            String          @db.VarChar(37)
+  shortDescription String          @db.VarChar(500)
+  role             String          @db.VarChar(20)
+  detailedTitle    String          @db.VarChar(250)
+  description      String          @db.Text
+  location         String          @db.VarChar(150)
+  employmentType   EmploymentType
+  experienceLevel  ExperienceLevel
+  experienceYears  Decimal?        @db.Decimal(4, 1)
+
+  salaryMin      Decimal?     @db.Decimal(10, 2)
+  salaryMax      Decimal?     @db.Decimal(10, 2)
+  salaryCurrency String       @default("INR") @db.VarChar(3)
+  salaryPeriod   SalaryPeriod @default(NOT_DISCLOSED)
+
+  qualifications    Json?
+  skills            Json?
+  experienceDetails Json?
+  otherData         Json?
+  keywords          Json?
+
+  logo   String?  @db.VarChar(500)
+  rating Decimal? @db.Decimal(2, 1)
+
+  metaTitle       String? @db.VarChar(60)
+  metaDescription String? @db.VarChar(160)
+  canonicalUrl    String? @db.VarChar(500)
+
+  ogTitle       String? @db.VarChar(60)
+  ogDescription String? @db.VarChar(200)
+  ogImage       String? @db.VarChar(500)
+  ogImageAlt    String? @db.VarChar(125)
+  ogType        String  @default("website") @db.VarChar(30)
+
+  status JobStatus @default(DRAFT)
+
+  applicationMethod ApplicationMethod @default(EXTERNAL)
+  applicationUrl    String?           @db.VarChar(1000)
+  applicationEmail  String?           @db.VarChar(254)
+  allowGuestApply   Boolean           @default(true)
+
+  applicationCount Int @default(0)
+  applyClickCount  Int @default(0)
+
+  publishedAt DateTime?
+  deadline    DateTime?
+  closedAt    DateTime?
+
+  companyId  String
+  categoryId String
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([location])
+  @@index([employmentType])
+  @@index([categoryId])
+  @@index([experienceLevel, experienceYears])
+  @@index([companyId])
+  @@index([deadline])
+}
