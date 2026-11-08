@@ -80,6 +80,15 @@ enum CompanyMembershipStatus {
   REMOVED
 }
 
+enum ApplicationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  SHORTLISTED
+  REJECTED
+  HIRED
+  WITHDRAWN
+}
+
 model User {
   id              String    @id @default(cuid())
   name            String?   @db.VarChar(150)
@@ -92,8 +101,9 @@ model User {
   sessions           Session[]
   companyMemberships CompanyRecruiter[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  applications Application[]
 
   @@index([role, isActive])
 }
@@ -267,8 +277,9 @@ model Job {
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  applications Application[]
 
   @@index([status, publishedAt])
   @@index([location])
@@ -277,4 +288,25 @@ model Job {
   @@index([experienceLevel, experienceYears])
   @@index([companyId])
   @@index([deadline])
+}
+
+model Application {
+  id             String            @id @default(cuid())
+  jobId          String
+  userId         String
+  applicantName  String            @db.VarChar(150)
+  applicantEmail String            @db.VarChar(254)
+  resumeUrl      String            @db.VarChar(1000)
+  coverLetter    String?           @db.Text
+  status         ApplicationStatus @default(SUBMITTED)
+
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([jobId, userId])
+  @@index([jobId, status, createdAt])
+  @@index([userId, createdAt])
 }
