@@ -101,6 +101,9 @@ model User {
   sessions           Session[]
   companyMemberships CompanyRecruiter[]
 
+  // Jobs created by this user
+  postedJobs Job[] @relation("JobPostedBy")
+
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   applications Application[]
@@ -273,9 +276,15 @@ model Job {
   companyId  String
   categoryId String
 
+  // Job creator
+  postedById String
+
   company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  // Job creator relation
+  postedBy User @relation("JobPostedBy", fields: [postedById], references: [id], onDelete: Restrict)
 
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -288,6 +297,7 @@ model Job {
   @@index([experienceLevel, experienceYears])
   @@index([companyId])
   @@index([deadline])
+  @@index([postedById])
 }
 
 model Application {
