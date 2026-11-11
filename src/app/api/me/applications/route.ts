@@ -1,83 +1,62 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
+import { getAuthenticatedUser } from "@/lib/auth/session";
 
+export const runtime = "nodejs";
+
+// GET: List applicant's applications
 export async function GET(request: NextRequest) {
   try {
-    // 1. Read session cookie
-    const sessionToken = request.cookies.get("session")?.value;
+    const user = await getAuthenticatedUser(request);
 
-    if (!sessionToken) {
+    if (!user) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Authentication required.",
-        },
+        { success: false, message: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    // 2. Hash session token
-    const tokenHash = createHash("sha256")
-      .update(sessionToken)
-      .digest("hex");
-
-    // 3. Validate session
-    const session = await prisma.session.findUnique({
-      where: { tokenHash },
-      select: {
-        expiresAt: true,
-        revokedAt: true,
-        user: {
-          select: {
-            id: true,
-            isActive: true,
-          },
-        },
-      },
-    });
-
-    if (
-      !session ||
-      session.revokedAt ||
-      session.expiresAt <= new Date() ||
-      !session.user.isActive
-    ) {
+    if (user.role !== "APPLICANT") {
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid or expired session.",
+          message: "Only applicants can access their applications",
         },
-        { status: 401 }
+        { status: 403 }
       );
     }
 
-    // 4. Fetch authenticated user's applications
     const applications = await prisma.application.findMany({
       where: {
-        userId: session.user.id,
-      },
-      orderBy: {
-        createdAt: "desc",
+        userId: user.id,
       },
       select: {
         id: true,
         status: true,
         applicantName: true,
         applicantEmail: true,
-        resumeUrl: true,
         coverLetter: true,
         createdAt: true,
         updatedAt: true,
+
+        resume: {
+          select: {
+            id: true,
+            title: true,
+            fileName: true,
+            mimeType: true,
+            fileSize: true,
+          },
+        },
 
         job: {
           select: {
             id: true,
             slug: true,
             title: true,
-            role: true,
+            shortDescription: true,
             location: true,
             employmentType: true,
             experienceLevel: true,
@@ -86,38 +65,43 @@ export async function GET(request: NextRequest) {
             salaryCurrency: true,
             salaryPeriod: true,
             status: true,
-
+            publishedAt: true,
             company: {
               select: {
+                id: true,
                 name: true,
                 slug: true,
                 logo: true,
+                location: true,
+              },
+            },
+            category: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
               },
             },
           },
         },
       },
+      orderBy: {
+        createdAt: "desc",
+      },
     });
 
-    // 5. Return applications
-    return NextResponse.json(
-      {
-        success: true,
-        message: "Applications fetched successfully.",
-        data: {
-          total: applications.length,
-          applications,
-        },
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({
+      success: true,
+      count: applications.length,
+      data: applications,
+    });
   } catch (error) {
-    console.error("MY_APPLICATIONS_ERROR:", error);
+    console.error("Get applications error:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: "An unexpected error occurred.",
+        message: "Failed to fetch applications",
       },
       { status: 500 }
     );

@@ -89,16 +89,22 @@ enum ApplicationStatus {
   WITHDRAWN
 }
 
+enum SkillSuggestionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // ======================================================
 // USER & AUTHENTICATION
 // ======================================================
 
 model User {
-  id              String   @id @default(cuid())
-  name            String?  @db.VarChar(150)
-  email           String   @unique @db.VarChar(254)
-  role            UserRole @default(APPLICANT)
-  isActive        Boolean  @default(true)
+  id              String    @id @default(cuid())
+  name            String?   @db.VarChar(150)
+  email           String    @unique @db.VarChar(254)
+  role            UserRole  @default(APPLICANT)
+  isActive        Boolean   @default(true)
   emailVerifiedAt DateTime?
 
   accounts           AuthAccount[]
@@ -115,6 +121,8 @@ model User {
   applicantSkills ApplicantSkill[]
   resumes         ApplicantResume[]
   savedJobs       SavedJob[]
+
+  skillSuggestions SkillSuggestion[]
 
   applications Application[]
 
@@ -331,9 +339,9 @@ model Job {
 // ======================================================
 
 model Application {
-  id             String            @id @default(cuid())
-  jobId          String
-  userId         String
+  id     String @id @default(cuid())
+  jobId  String
+  userId String
 
   // Applicant details captured at application time
   applicantName  String @db.VarChar(150)
@@ -421,10 +429,10 @@ model ApplicantExperience {
   id     String @id @default(cuid())
   userId String
 
-  companyName    String         @db.VarChar(200)
-  jobTitle       String         @db.VarChar(150)
+  companyName    String          @db.VarChar(200)
+  jobTitle       String          @db.VarChar(150)
   employmentType EmploymentType?
-  location       String?        @db.VarChar(150)
+  location       String?         @db.VarChar(150)
 
   description String? @db.Text
 
@@ -512,4 +520,18 @@ model SavedJob {
   @@unique([userId, jobId])
   @@index([userId, createdAt])
   @@index([jobId])
+}
+
+model SkillSuggestion {
+  id          String                @id @default(cuid())
+  name        String                @unique
+  normalized  String                @unique
+  suggestedBy String
+  status      SkillSuggestionStatus @default(PENDING)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  user User @relation(fields: [suggestedBy], references: [id], onDelete: Cascade)
+
+  @@index([status])
 }
