@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
@@ -10,71 +9,55 @@ type RouteContext = {
   params: Promise<{ jobId: string }>;
 };
 
+function errorResponse(message: string, status: number) {
+  return NextResponse.json(
+    {
+      success: false,
+      message,
+    },
+    { status }
+  );
+}
+
 export async function DELETE(
   request: NextRequest,
-  { params }: RouteContext
+  context: RouteContext
 ) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 }
-      );
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return NextResponse.json(
-        { success: false, message: "Only applicants can remove saved jobs" },
-        { status: 403 }
-      );
+      return errorResponse("Forbidden", 403);
     }
 
-    const { jobId } = await params;
+    const { jobId } = await context.params;
 
     if (!jobId?.trim()) {
-      return NextResponse.json(
-        { success: false, message: "Valid jobId is required" },
-        { status: 400 }
-      );
+      return errorResponse("Valid jobId is required", 400);
     }
 
-    const savedJob = await prisma.savedJob.findUnique({
+    const result = await prisma.savedJob.deleteMany({
       where: {
-        userId_jobId: {
-          userId: user.id,
-          jobId: jobId.trim(),
-        },
-      },
-      select: {
-        id: true,
+        userId: user.id,
+        jobId: jobId.trim(),
       },
     });
 
-    if (!savedJob) {
-      return NextResponse.json(
-        { success: false, message: "Saved job not found" },
-        { status: 404 }
-      );
+    if (result.count === 0) {
+      return errorResponse("Saved job not found", 404);
     }
-
-    await prisma.savedJob.delete({
-      where: {
-        id: savedJob.id,
-      },
-    });
 
     return NextResponse.json({
       success: true,
-      message: "Job removed from saved jobs",
+      message: "Saved job removed successfully",
     });
   } catch (error) {
-    console.error("Delete saved job error:", error);
+    console.error("DELETE /api/me/saved-jobs/[jobId] error:", error);
 
-    return NextResponse.json(
-      { success: false, message: "Failed to remove saved job" },
-      { status: 500 }
-    );
+    return errorResponse("Failed to remove saved job", 500);
   }
 }

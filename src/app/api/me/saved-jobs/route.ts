@@ -1,128 +1,225 @@
-
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@/generated/prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth/session";
 
 export const runtime = "nodejs";
 
-// GET: List applicant's saved jobs
+function errorResponse(message: string, status: number) {
+  return NextResponse.json(
+    {
+      success: false,
+      message,
+    },
+    { status }
+  );
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 }
-      );
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return NextResponse.json(
-        { success: false, message: "Only applicants can access saved jobs" },
-        { status: 403 }
+      return errorResponse("Forbidden", 403);
+    }
+
+    const searchParams = request.nextUrl.searchParams;
+
+    const pageInput = searchParams.get("page");
+    const limitInput = searchParams.get("limit");
+
+    const page =
+      pageInput === null ? 1 : Number(pageInput);
+
+    const limit =
+      limitInput === null ? 10 : Number(limitInput);
+
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1
+    ) {
+      return errorResponse("Invalid page number", 400);
+    }
+
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 50
+    ) {
+      return errorResponse(
+        "Limit must be between 1 and 50",
+        400
       );
     }
 
-    const savedJobs = await prisma.savedJob.findMany({
-      where: {
-        userId: user.id,
-      },
-      select: {
-        id: true,
-        createdAt: true,
-        job: {
-          select: {
-            id: true,
-            slug: true,
-            title: true,
-            shortDescription: true,
-            location: true,
-            employmentType: true,
-            experienceLevel: true,
-            salaryMin: true,
-            salaryMax: true,
-            salaryCurrency: true,
-            salaryPeriod: true,
-            status: true,
-            publishedAt: true,
-            deadline: true,
-            company: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
-                logo: true,
-                location: true,
+    const skip = (page - 1) * limit;
+
+    if (!Number.isSafeInteger(skip)) {
+      return errorResponse("Requested page is too large", 400);
+    }
+
+    const where = {
+      userId: user.id,
+    };
+
+    const [total, savedJobs] = await prisma.$transaction([
+      prisma.savedJob.count({
+        where,
+      }),
+
+      prisma.savedJob.findMany({
+        where,
+        select: {
+          id: true,
+          createdAt: true,
+          job: {
+            select: {
+              id: true,
+              slug: true,
+              title: true,
+              shortDescription: true,
+              location: true,
+              employmentType: true,
+              experienceLevel: true,
+              salaryMin: true,
+              salaryMax: true,
+              salaryCurrency: true,
+              salaryPeriod: true,
+              status: true,
+              publishedAt: true,
+              deadline: true,
+
+              company: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                  logo: true,
+                  location: true,
+                },
               },
-            },
-            category: {
-              select: {
-                id: true,
-                name: true,
-                slug: true,
+
+              category: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                },
               },
             },
           },
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
+
+        orderBy: [
+          {
+            createdAt: "desc",
+          },
+          {
+            id: "desc",
+          },
+        ],
+
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    const now = new Date();
+
+    const data = savedJobs.map((savedJob) => {
+      const job = savedJob.job;
+
+      let unavailableReason: string | null = null;
+
+      if (job.status !== "PUBLISHED") {
+        unavailableReason = "This job is no longer published";
+      } else if (!job.publishedAt) {
+        unavailableReason = "This job has not been published";
+      } else if (job.deadline && job.deadline < now) {
+        unavailableReason = "Application deadline has passed";
+      }
+
+      return {
+        ...savedJob,
+        isAvailable: unavailableReason === null,
+        unavailableReason,
+      };
     });
+
+    const totalPages = Math.ceil(total / limit);
 
     return NextResponse.json({
       success: true,
-      count: savedJobs.length,
-      data: savedJobs,
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1 && total > 0,
+      },
     });
   } catch (error) {
-    console.error("Get saved jobs error:", error);
+    console.error("GET /api/me/saved-jobs error:", error);
 
-    return NextResponse.json(
-      { success: false, message: "Failed to fetch saved jobs" },
-      { status: 500 }
-    );
+    return errorResponse("Failed to fetch saved jobs", 500);
   }
 }
 
-// POST: Save a job
+
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 }
-      );
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return NextResponse.json(
-        { success: false, message: "Only applicants can save jobs" },
-        { status: 403 }
-      );
+      return errorResponse("Forbidden", 403);
     }
 
-    const body = await request.json().catch(() => null);
+    const body: unknown = await request.json();
+
+    if (!isObject(body)) {
+      return errorResponse("Invalid request body", 400);
+    }
 
     if (
-      !body ||
+      Object.keys(body).some((key) => key !== "jobId")
+    ) {
+      return errorResponse("Unsupported field provided", 400);
+    }
+
+    if (
       typeof body.jobId !== "string" ||
       !body.jobId.trim()
     ) {
-      return NextResponse.json(
-        { success: false, message: "Valid jobId is required" },
-        { status: 400 }
-      );
+      return errorResponse("Valid jobId is required", 400);
     }
 
     const jobId = body.jobId.trim();
+    const now = new Date();
 
     const job = await prisma.job.findUnique({
-      where: { id: jobId },
+      where: {
+        id: jobId,
+      },
       select: {
         id: true,
         status: true,
@@ -131,51 +228,27 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!job || job.status !== "PUBLISHED") {
-      return NextResponse.json(
-        { success: false, message: "Job not found or unavailable" },
-        { status: 404 }
-      );
+    if (!job) {
+      return errorResponse("Job not found", 404);
     }
 
-    const now = new Date();
+    if (job.status !== "PUBLISHED" || !job.publishedAt) {
+      return errorResponse("This job is not available for saving", 400);
+    }
 
     if (job.deadline && job.deadline < now) {
-      return NextResponse.json(
-        { success: false, message: "This job application deadline has passed" },
-        { status: 409 }
-      );
-    }
-
-    const existingSavedJob = await prisma.savedJob.findUnique({
-      where: {
-        userId_jobId: {
-          userId: user.id,
-          jobId,
-        },
-      },
-      select: {
-        id: true,
-        createdAt: true,
-      },
-    });
-
-    if (existingSavedJob) {
-      return NextResponse.json(
-        { success: false, message: "Job is already saved" },
-        { status: 409 }
-      );
+      return errorResponse("Application deadline has passed", 400);
     }
 
     const savedJob = await prisma.savedJob.create({
       data: {
         userId: user.id,
-        jobId,
+        jobId: job.id,
       },
       select: {
         id: true,
-        jobId: true,
         createdAt: true,
+        jobId: true,
       },
     });
 
@@ -188,24 +261,15 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error) {
-    // Handles duplicate requests that race between lookup and create.
     if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
+      error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2002"
     ) {
-      return NextResponse.json(
-        { success: false, message: "Job is already saved" },
-        { status: 409 }
-      );
+      return errorResponse("Job is already saved", 409);
     }
 
-    console.error("Save job error:", error);
+    console.error("POST /api/me/saved-jobs error:", error);
 
-    return NextResponse.json(
-      { success: false, message: "Failed to save job" },
-      { status: 500 }
-    );
+    return errorResponse("Failed to save job", 500);
   }
 }

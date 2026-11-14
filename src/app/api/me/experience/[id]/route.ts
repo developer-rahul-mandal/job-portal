@@ -1,81 +1,110 @@
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth/session";
 
-const employmentTypes = [
+export const runtime = "nodejs";
+
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+const EMPLOYMENT_TYPES = [
   "FULL_TIME",
   "PART_TIME",
   "CONTRACT",
   "INTERNSHIP",
 ] as const;
 
-type RouteContext = {
-  params: Promise<{ id: string }>;
-};
-
 function errorResponse(message: string, status: number) {
   return NextResponse.json(
-    { success: false, message },
-    { status },
+    {
+      success: false,
+      message,
+    },
+    { status }
   );
 }
 
-function isValidDate(value: unknown): value is string {
+function isObject(value: unknown): value is Record<string, unknown> {
   return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    !Number.isNaN(new Date(value).getTime())
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
   );
 }
 
-// ======================================================
-// PATCH /api/me/experience/[id]
-// ======================================================
+function parseDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== value
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function isFutureDate(date: Date): boolean {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  return date.getTime() > today.getTime();
+}
+
+function optionalString(
+  value: unknown,
+  maxLength: number
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length > maxLength) {
+    return undefined;
+  }
+
+  return trimmed || null;
+}
 
 export async function PATCH(
   request: NextRequest,
-  { params }: RouteContext,
+  context: RouteContext
 ) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return errorResponse("Authentication required.", 401);
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return errorResponse("Applicant access required.", 403);
+      return errorResponse("Forbidden", 403);
     }
 
-    const { id } = await params;
+    const { id } = await context.params;
 
     if (!id) {
-      return errorResponse("Experience ID is required.", 400);
-    }
-
-    const existing = await prisma.applicantExperience.findFirst({
-      where: {
-        id,
-        userId: user.id,
-      },
-    });
-
-    if (!existing) {
-      return errorResponse("Experience record not found.", 404);
+      return errorResponse("Experience ID is required", 400);
     }
 
     const body: unknown = await request.json();
 
-    if (
-      typeof body !== "object" ||
-      body === null ||
-      Array.isArray(body)
-    ) {
-      return errorResponse("Invalid request body.", 400);
+    if (!isObject(body)) {
+      return errorResponse("Invalid request body", 400);
     }
-
-    const input = body as Record<string, unknown>;
 
     const allowedFields = [
       "companyName",
@@ -88,211 +117,12 @@ export async function PATCH(
       "isCurrent",
     ];
 
-    const invalidFields = Object.keys(input).filter(
-      (field) => !allowedFields.includes(field),
-    );
-
-    if (invalidFields.length > 0) {
-      return errorResponse(
-        `Unsupported fields: ${invalidFields.join(", ")}`,
-        400,
-      );
+    if (Object.keys(body).some((key) => !allowedFields.includes(key))) {
+      return errorResponse("Unsupported field provided", 400);
     }
 
-    if (Object.keys(input).length === 0) {
-      return errorResponse("No fields provided for update.", 400);
-    }
-
-    const data: Record<string, unknown> = {};
-
-    // Company name
-    if ("companyName" in input) {
-      if (
-        typeof input.companyName !== "string" ||
-        !input.companyName.trim() ||
-        input.companyName.trim().length > 200
-      ) {
-        return errorResponse("Invalid company name.", 400);
-      }
-
-      data.companyName = input.companyName.trim();
-    }
-
-    // Job title
-    if ("jobTitle" in input) {
-      if (
-        typeof input.jobTitle !== "string" ||
-        !input.jobTitle.trim() ||
-        input.jobTitle.trim().length > 150
-      ) {
-        return errorResponse("Invalid job title.", 400);
-      }
-
-      data.jobTitle = input.jobTitle.trim();
-    }
-
-    // Employment type
-    if ("employmentType" in input) {
-      if (input.employmentType === null) {
-        data.employmentType = null;
-      } else if (
-        typeof input.employmentType !== "string" ||
-        !employmentTypes.includes(
-          input.employmentType as (typeof employmentTypes)[number],
-        )
-      ) {
-        return errorResponse("Invalid employment type.", 400);
-      } else {
-        data.employmentType =
-          input.employmentType as (typeof employmentTypes)[number];
-      }
-    }
-
-    // Location
-    if ("location" in input) {
-      if (
-        input.location !== null &&
-        (
-          typeof input.location !== "string" ||
-          input.location.trim().length > 150
-        )
-      ) {
-        return errorResponse("Invalid location.", 400);
-      }
-
-      data.location =
-        typeof input.location === "string"
-          ? input.location.trim() || null
-          : null;
-    }
-
-    // Description
-    if ("description" in input) {
-      if (
-        input.description !== null &&
-        (
-          typeof input.description !== "string" ||
-          input.description.length > 5000
-        )
-      ) {
-        return errorResponse("Invalid description.", 400);
-      }
-
-      data.description =
-        typeof input.description === "string"
-          ? input.description.trim() || null
-          : null;
-    }
-
-    // Start date
-    if ("startDate" in input) {
-      if (!isValidDate(input.startDate)) {
-        return errorResponse("Invalid start date.", 400);
-      }
-
-      data.startDate = new Date(input.startDate);
-    }
-
-    // Current employment
-    if ("isCurrent" in input) {
-      if (typeof input.isCurrent !== "boolean") {
-        return errorResponse("isCurrent must be a boolean.", 400);
-      }
-
-      data.isCurrent = input.isCurrent;
-
-      if (input.isCurrent) {
-        data.endDate = null;
-      }
-    }
-
-    // End date
-    if ("endDate" in input) {
-      if (input.endDate === null) {
-        data.endDate = null;
-      } else {
-        if (!isValidDate(input.endDate)) {
-          return errorResponse("Invalid end date.", 400);
-        }
-
-        data.endDate = new Date(input.endDate);
-      }
-    }
-
-    // Validate final date combination
-    const finalStartDate =
-      (data.startDate as Date | undefined) ?? existing.startDate;
-
-    const finalIsCurrent =
-      (data.isCurrent as boolean | undefined) ?? existing.isCurrent;
-
-    const finalEndDate =
-      "endDate" in data
-        ? (data.endDate as Date | null)
-        : existing.endDate;
-
-    if (!finalIsCurrent && !finalEndDate) {
-      return errorResponse(
-        "End date is required when employment is not current.",
-        400,
-      );
-    }
-
-    if (finalEndDate && finalEndDate < finalStartDate) {
-      return errorResponse(
-        "End date cannot be earlier than start date.",
-        400,
-      );
-    }
-
-    if (finalIsCurrent) {
-      data.endDate = null;
-    }
-
-    const experience = await prisma.applicantExperience.update({
-      where: {
-        id,
-      },
-      data: data as Parameters<
-        typeof prisma.applicantExperience.update
-      >[0]["data"],
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: "Experience record updated successfully.",
-      data: experience,
-    });
-  } catch (error) {
-    console.error("PATCH_ME_EXPERIENCE_ERROR:", error);
-
-    return errorResponse("An unexpected error occurred.", 500);
-  }
-}
-
-// ======================================================
-// DELETE /api/me/experience/[id]
-// ======================================================
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: RouteContext,
-) {
-  try {
-    const user = await getAuthenticatedUser(request);
-
-    if (!user) {
-      return errorResponse("Authentication required.", 401);
-    }
-
-    if (user.role !== "APPLICANT") {
-      return errorResponse("Applicant access required.", 403);
-    }
-
-    const { id } = await params;
-
-    if (!id) {
-      return errorResponse("Experience ID is required.", 400);
+    if (Object.keys(body).length === 0) {
+      return errorResponse("No fields provided for update", 400);
     }
 
     const existing = await prisma.applicantExperience.findFirst({
@@ -300,28 +130,227 @@ export async function DELETE(
         id,
         userId: user.id,
       },
-      select: {
-        id: true,
-      },
     });
 
     if (!existing) {
-      return errorResponse("Experience record not found.", 404);
+      return errorResponse("Experience record not found", 404);
     }
 
-    await prisma.applicantExperience.delete({
+    const data: {
+      companyName?: string;
+      jobTitle?: string;
+      employmentType?: (typeof EMPLOYMENT_TYPES)[number] | null;
+      location?: string | null;
+      description?: string | null;
+      startDate?: Date;
+      endDate?: Date | null;
+      isCurrent?: boolean;
+    } = {};
+
+    if ("companyName" in body) {
+      if (
+        typeof body.companyName !== "string" ||
+        !body.companyName.trim() ||
+        body.companyName.trim().length > 200
+      ) {
+        return errorResponse("Invalid companyName (max 200 characters)", 400);
+      }
+
+      data.companyName = body.companyName.trim();
+    }
+
+    if ("jobTitle" in body) {
+      if (
+        typeof body.jobTitle !== "string" ||
+        !body.jobTitle.trim() ||
+        body.jobTitle.trim().length > 150
+      ) {
+        return errorResponse("Invalid jobTitle (max 150 characters)", 400);
+      }
+
+      data.jobTitle = body.jobTitle.trim();
+    }
+
+    if ("employmentType" in body) {
+      if (body.employmentType === null) {
+        data.employmentType = null;
+      } else if (
+        typeof body.employmentType === "string" &&
+        EMPLOYMENT_TYPES.includes(
+          body.employmentType as (typeof EMPLOYMENT_TYPES)[number]
+        )
+      ) {
+        data.employmentType =
+          body.employmentType as (typeof EMPLOYMENT_TYPES)[number];
+      } else {
+        return errorResponse("Invalid employmentType", 400);
+      }
+    }
+
+    if ("location" in body) {
+      const value = optionalString(body.location, 150);
+
+      if (value === undefined) {
+        return errorResponse("Invalid location (max 150 characters)", 400);
+      }
+
+      data.location = value;
+    }
+
+    if ("description" in body) {
+      const value = optionalString(body.description, 5000);
+
+      if (value === undefined) {
+        return errorResponse("Invalid description (max 5000 characters)", 400);
+      }
+
+      data.description = value;
+    }
+
+    if ("startDate" in body) {
+      const date = parseDate(body.startDate);
+
+      if (!date) {
+        return errorResponse("Invalid startDate (use YYYY-MM-DD)", 400);
+      }
+
+      if (isFutureDate(date)) {
+        return errorResponse("startDate cannot be in the future", 400);
+      }
+
+      data.startDate = date;
+    }
+
+    if ("isCurrent" in body) {
+      if (typeof body.isCurrent !== "boolean") {
+        return errorResponse("isCurrent must be a boolean", 400);
+      }
+
+      data.isCurrent = body.isCurrent;
+    }
+
+    const finalIsCurrent = data.isCurrent ?? existing.isCurrent;
+    const finalStartDate = data.startDate ?? existing.startDate;
+
+    let finalEndDate: Date | null =
+      "endDate" in body ? null : existing.endDate;
+
+    if ("endDate" in body) {
+      if (body.endDate === null || body.endDate === "") {
+        finalEndDate = null;
+      } else {
+        const date = parseDate(body.endDate);
+
+        if (!date) {
+          return errorResponse("Invalid endDate (use YYYY-MM-DD)", 400);
+        }
+
+        if (isFutureDate(date)) {
+          return errorResponse("endDate cannot be in the future", 400);
+        }
+
+        finalEndDate = date;
+      }
+    }
+
+    if (isFutureDate(finalStartDate)) {
+      return errorResponse("startDate cannot be in the future", 400);
+    }
+
+    if (finalIsCurrent) {
+      if (finalEndDate !== null) {
+        return errorResponse(
+          "endDate must be empty for current employment",
+          400
+        );
+      }
+
+      data.endDate = null;
+    } else {
+      if (!finalEndDate) {
+        return errorResponse(
+          "endDate is required for past employment",
+          400
+        );
+      }
+
+      if (finalEndDate < finalStartDate) {
+        return errorResponse("endDate cannot be before startDate", 400);
+      }
+
+      data.endDate = finalEndDate;
+    }
+
+    const result = await prisma.applicantExperience.updateMany({
       where: {
         id,
+        userId: user.id,
+      },
+      data,
+    });
+
+    if (result.count === 0) {
+      return errorResponse("Experience record not found", 404);
+    }
+
+    const updatedExperience = await prisma.applicantExperience.findFirst({
+      where: {
+        id,
+        userId: user.id,
       },
     });
 
     return NextResponse.json({
       success: true,
-      message: "Experience record deleted successfully.",
+      message: "Experience updated successfully",
+      data: updatedExperience,
     });
   } catch (error) {
-    console.error("DELETE_ME_EXPERIENCE_ERROR:", error);
+    console.error("PATCH /api/me/experience/[id] error:", error);
 
-    return errorResponse("An unexpected error occurred.", 500);
+    return errorResponse("Failed to update experience", 500);
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  context: RouteContext
+) {
+  try {
+    const user = await getAuthenticatedUser(request);
+
+    if (!user) {
+      return errorResponse("Unauthorized", 401);
+    }
+
+    if (user.role !== "APPLICANT") {
+      return errorResponse("Forbidden", 403);
+    }
+
+    const { id } = await context.params;
+
+    if (!id) {
+      return errorResponse("Experience ID is required", 400);
+    }
+
+    const result = await prisma.applicantExperience.deleteMany({
+      where: {
+        id,
+        userId: user.id,
+      },
+    });
+
+    if (result.count === 0) {
+      return errorResponse("Experience record not found", 404);
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Experience deleted successfully",
+    });
+  } catch (error) {
+    console.error("DELETE /api/me/experience/[id] error:", error);
+
+    return errorResponse("Failed to delete experience", 500);
   }
 }

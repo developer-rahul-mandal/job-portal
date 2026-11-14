@@ -3,7 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth/session";
 
-const employmentTypes = [
+export const runtime = "nodejs";
+
+const EMPLOYMENT_TYPES = [
   "FULL_TIME",
   "PART_TIME",
   "CONTRACT",
@@ -16,82 +18,117 @@ function errorResponse(message: string, status: number) {
       success: false,
       message,
     },
-    { status },
+    { status }
   );
 }
 
-function isValidDate(value: unknown): value is string {
+function isObject(value: unknown): value is Record<string, unknown> {
   return (
-    typeof value === "string" &&
-    value.trim().length > 0 &&
-    !Number.isNaN(new Date(value).getTime())
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
   );
 }
 
-// ======================================================
-// GET /api/me/experience
-// ======================================================
+function parseDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== value
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function isFutureDate(date: Date): boolean {
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  return date.getTime() > today.getTime();
+}
+
+function optionalString(
+  value: unknown,
+  maxLength: number
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length > maxLength) {
+    return undefined;
+  }
+
+  return trimmed || null;
+}
 
 export async function GET(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return errorResponse("Authentication required.", 401);
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return errorResponse("Applicant access required.", 403);
+      return errorResponse("Forbidden", 403);
     }
 
     const experience = await prisma.applicantExperience.findMany({
       where: {
         userId: user.id,
       },
-      orderBy: {
-        startDate: "desc",
-      },
+      orderBy: [
+        {
+          startDate: "desc",
+        },
+        {
+          createdAt: "desc",
+        },
+      ],
     });
 
     return NextResponse.json({
       success: true,
-      message: "Experience records fetched successfully.",
+      count: experience.length,
       data: experience,
     });
   } catch (error) {
-    console.error("GET_ME_EXPERIENCE_ERROR:", error);
+    console.error("GET /api/me/experience error:", error);
 
-    return errorResponse("An unexpected error occurred.", 500);
+    return errorResponse("Failed to fetch experience records", 500);
   }
 }
-
-// ======================================================
-// POST /api/me/experience
-// ======================================================
 
 export async function POST(request: NextRequest) {
   try {
     const user = await getAuthenticatedUser(request);
 
     if (!user) {
-      return errorResponse("Authentication required.", 401);
+      return errorResponse("Unauthorized", 401);
     }
 
     if (user.role !== "APPLICANT") {
-      return errorResponse("Applicant access required.", 403);
+      return errorResponse("Forbidden", 403);
     }
 
     const body: unknown = await request.json();
 
-    if (
-      typeof body !== "object" ||
-      body === null ||
-      Array.isArray(body)
-    ) {
-      return errorResponse("Invalid request body.", 400);
+    if (!isObject(body)) {
+      return errorResponse("Invalid request body", 400);
     }
-
-    const input = body as Record<string, unknown>;
 
     const allowedFields = [
       "companyName",
@@ -104,129 +141,104 @@ export async function POST(request: NextRequest) {
       "isCurrent",
     ];
 
-    const invalidFields = Object.keys(input).filter(
-      (field) => !allowedFields.includes(field),
-    );
-
-    if (invalidFields.length > 0) {
-      return errorResponse(
-        `Unsupported fields: ${invalidFields.join(", ")}`,
-        400,
-      );
+    if (Object.keys(body).some((key) => !allowedFields.includes(key))) {
+      return errorResponse("Unsupported field provided", 400);
     }
 
-    // Company name
-    if (
-      typeof input.companyName !== "string" ||
-      !input.companyName.trim() ||
-      input.companyName.trim().length > 200
-    ) {
-      return errorResponse("Invalid company name.", 400);
+    const companyName =
+      typeof body.companyName === "string"
+        ? body.companyName.trim()
+        : "";
+
+    const jobTitle =
+      typeof body.jobTitle === "string"
+        ? body.jobTitle.trim()
+        : "";
+
+    if (!companyName || companyName.length > 200) {
+      return errorResponse("Company name is required (max 200 characters)", 400);
     }
 
-    // Job title
-    if (
-      typeof input.jobTitle !== "string" ||
-      !input.jobTitle.trim() ||
-      input.jobTitle.trim().length > 150
-    ) {
-      return errorResponse("Invalid job title.", 400);
+    if (!jobTitle || jobTitle.length > 150) {
+      return errorResponse("Job title is required (max 150 characters)", 400);
     }
 
-    // Employment type
     let employmentType:
-      | (typeof employmentTypes)[number]
+      | (typeof EMPLOYMENT_TYPES)[number]
       | null = null;
 
-    if (
-      input.employmentType !== undefined &&
-      input.employmentType !== null
-    ) {
+    if (body.employmentType !== undefined && body.employmentType !== null) {
       if (
-        typeof input.employmentType !== "string" ||
-        !employmentTypes.includes(
-          input.employmentType as (typeof employmentTypes)[number],
+        typeof body.employmentType !== "string" ||
+        !EMPLOYMENT_TYPES.includes(
+          body.employmentType as (typeof EMPLOYMENT_TYPES)[number]
         )
       ) {
-        return errorResponse("Invalid employment type.", 400);
+        return errorResponse("Invalid employmentType", 400);
       }
 
       employmentType =
-        input.employmentType as (typeof employmentTypes)[number];
+        body.employmentType as (typeof EMPLOYMENT_TYPES)[number];
     }
 
-    // Location
-    let location: string | null = null;
+    const location = optionalString(body.location, 150);
 
-    if (input.location !== undefined && input.location !== null) {
-      if (
-        typeof input.location !== "string" ||
-        input.location.trim().length > 150
-      ) {
-        return errorResponse("Invalid location.", 400);
-      }
-
-      location = input.location.trim() || null;
+    if (location === undefined) {
+      return errorResponse("Invalid location (max 150 characters)", 400);
     }
 
-    // Description
-    let description: string | null = null;
+    const description = optionalString(body.description, 5000);
 
-    if (
-      input.description !== undefined &&
-      input.description !== null
-    ) {
-      if (
-        typeof input.description !== "string" ||
-        input.description.length > 5000
-      ) {
-        return errorResponse("Invalid description.", 400);
-      }
-
-      description = input.description.trim() || null;
+    if (description === undefined) {
+      return errorResponse("Invalid description (max 5000 characters)", 400);
     }
 
-    // Start date
-    if (!isValidDate(input.startDate)) {
-      return errorResponse("Invalid start date.", 400);
+    const startDate = parseDate(body.startDate);
+
+    if (!startDate) {
+      return errorResponse("A valid startDate (YYYY-MM-DD) is required", 400);
     }
 
-    const startDate = new Date(input.startDate);
+    if (isFutureDate(startDate)) {
+      return errorResponse("startDate cannot be in the future", 400);
+    }
 
-    // Current employment status
-    const isCurrent = input.isCurrent ?? false;
+    const isCurrent = body.isCurrent ?? false;
 
     if (typeof isCurrent !== "boolean") {
-      return errorResponse("isCurrent must be a boolean.", 400);
+      return errorResponse("isCurrent must be a boolean", 400);
     }
 
-    // End date
     let endDate: Date | null = null;
 
-    if (!isCurrent) {
-      if (!isValidDate(input.endDate)) {
+    if (isCurrent) {
+      if (body.endDate !== undefined && body.endDate !== null && body.endDate !== "") {
+        return errorResponse("endDate must be empty for current employment", 400);
+      }
+    } else {
+      endDate = parseDate(body.endDate);
+
+      if (!endDate) {
         return errorResponse(
-          "A valid end date is required when employment is not current.",
-          400,
+          "A valid endDate (YYYY-MM-DD) is required for past employment",
+          400
         );
       }
 
-      endDate = new Date(input.endDate);
+      if (isFutureDate(endDate)) {
+        return errorResponse("endDate cannot be in the future", 400);
+      }
 
       if (endDate < startDate) {
-        return errorResponse(
-          "End date cannot be earlier than start date.",
-          400,
-        );
+        return errorResponse("endDate cannot be before startDate", 400);
       }
     }
 
-    // Create experience
     const experience = await prisma.applicantExperience.create({
       data: {
         userId: user.id,
-        companyName: input.companyName.trim(),
-        jobTitle: input.jobTitle.trim(),
+        companyName,
+        jobTitle,
         employmentType,
         location,
         description,
@@ -239,14 +251,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        message: "Experience record created successfully.",
+        message: "Experience added successfully",
         data: experience,
       },
-      { status: 201 },
+      { status: 201 }
     );
   } catch (error) {
-    console.error("POST_ME_EXPERIENCE_ERROR:", error);
+    console.error("POST /api/me/experience error:", error);
 
-    return errorResponse("An unexpected error occurred.", 500);
+    return errorResponse("Failed to add experience", 500);
   }
 }
