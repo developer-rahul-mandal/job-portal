@@ -1,4 +1,3 @@
-
 import {
   createHash,
   randomBytes,
@@ -11,26 +10,37 @@ import {
   googleOAuthClient,
   GOOGLE_CLIENT_ID,
 } from "@/lib/google-oauth";
+import { sanitizeRedirectPath, type UserRole } from "@/lib/auth/redirects";
 
 const SESSION_DURATION = 7 * 24 * 60 * 60;
 const STATE_COOKIE = "google_oauth_state";
+const REDIRECT_COOKIE = "google_oauth_redirect";
 
 function hashSessionToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 function redirectToLogin(request: NextRequest, error: string) {
-  const response = NextResponse.redirect(
-    new URL(`/login?error=${encodeURIComponent(error)}`, request.url)
+  const redirectParam = request.cookies.get(REDIRECT_COOKIE)?.value;
+  const loginUrl = new URL(
+    `/login?error=${encodeURIComponent(error)}`,
+    request.url,
   );
 
+  if (redirectParam && redirectParam.startsWith("/")) {
+    loginUrl.searchParams.set("redirect", redirectParam);
+  }
+
+  const response = NextResponse.redirect(loginUrl);
+
   response.cookies.delete(STATE_COOKIE);
+  response.cookies.delete(REDIRECT_COOKIE);
 
   return response;
 }
 
 function isPrismaUniqueConstraintError(
-  error: unknown
+  error: unknown,
 ): error is { code: "P2002" } {
   return (
     typeof error === "object" &&
@@ -53,7 +63,7 @@ export async function GET(request: NextRequest) {
       returnedState.length !== storedState.length ||
       !timingSafeEqual(
         Buffer.from(returnedState),
-        Buffer.from(storedState)
+        Buffer.from(storedState),
       )
     ) {
       return redirectToLogin(request, "invalid_oauth_state");
@@ -89,11 +99,13 @@ export async function GET(request: NextRequest) {
     const tokenHash = hashSessionToken(sessionToken);
 
     const expiresAt = new Date(
-      Date.now() + SESSION_DURATION * 1000
+      Date.now() + SESSION_DURATION * 1000,
     );
 
+    let userRole: UserRole = "APPLICANT";
+
     try {
-      await prisma.$transaction(async (tx) => {
+      userRole = await prisma.$transaction(async (tx) => {
         const existingAccount = await tx.authAccount.findUnique({
           where: {
             provider_providerAccountId: {
@@ -174,6 +186,8 @@ export async function GET(request: NextRequest) {
             expiresAt,
           },
         });
+
+        return authenticatedUser.role as UserRole;
       });
     } catch (error) {
       // Recover only if the Google identity was successfully
@@ -208,16 +222,22 @@ export async function GET(request: NextRequest) {
             expiresAt,
           },
         });
+
+        userRole = linkedAccount.user.role as UserRole;
       } else {
         throw error;
       }
     }
 
+    const redirectCookie = request.cookies.get(REDIRECT_COOKIE)?.value;
+    const destination = sanitizeRedirectPath(redirectCookie, userRole);
+
     const response = NextResponse.redirect(
-      new URL("/", request.url)
+      new URL(destination, request.url),
     );
 
     response.cookies.delete(STATE_COOKIE);
+    response.cookies.delete(REDIRECT_COOKIE);
 
     response.cookies.set("session", sessionToken, {
       httpOnly: true,
@@ -237,7 +257,7 @@ export async function GET(request: NextRequest) {
       if (error.message === "GOOGLE_ACCOUNT_ALREADY_LINKED") {
         return redirectToLogin(
           request,
-          "google_account_already_linked"
+          "google_account_already_linked",
         );
       }
     }

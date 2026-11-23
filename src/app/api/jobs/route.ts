@@ -257,6 +257,7 @@ export async function GET(request: Request) {
           salaryPeriod: true,
           skills: true,
           keywords: true,
+          applicationMethod: true,
           publishedAt: true,
           deadline: true,
 

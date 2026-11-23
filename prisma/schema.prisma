@@ -125,6 +125,7 @@ model User {
   skillSuggestions SkillSuggestion[]
 
   applications Application[]
+  applicationStatusChanges ApplicationStatusHistory[] @relation("ApplicationStatusChanges")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -354,12 +355,20 @@ model Application {
   resumeId String?
   resume   ApplicantResume? @relation(fields: [resumeId], references: [id], onDelete: SetNull)
 
+  // Preserved application-specific resume snapshot reference
+  resumeStorageKey String? @db.VarChar(500)
+  resumeFileName   String? @db.VarChar(255)
+  resumeMimeType   String? @db.VarChar(100)
+  resumeFileSize   Int?
+
   coverLetter     String?           @db.Text
   profileSnapshot Json?
   status          ApplicationStatus @default(SUBMITTED)
 
   job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  statusHistory ApplicationStatusHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -368,6 +377,22 @@ model Application {
   @@index([jobId, status, createdAt])
   @@index([userId, createdAt])
   @@index([resumeId])
+}
+
+model ApplicationStatusHistory {
+  id             String             @id @default(cuid())
+  applicationId  String
+  previousStatus ApplicationStatus?
+  newStatus      ApplicationStatus
+  changedById    String
+  reason         String?            @db.VarChar(500)
+  createdAt      DateTime           @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  changedBy   User        @relation("ApplicationStatusChanges", fields: [changedById], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, createdAt])
+  @@index([changedById])
 }
 
 // ======================================================

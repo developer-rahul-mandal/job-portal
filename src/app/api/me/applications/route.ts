@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-
 import { prisma } from "@/lib/prisma";
 import { ApplicationStatus } from "@/generated/prisma/client";
 import { getAuthenticatedUser } from "@/lib/auth/session";
@@ -14,14 +13,14 @@ function errorResponse(message: string, status: number) {
       success: false,
       message,
     },
-    { status },
+    { status }
   );
 }
 
 function parsePositiveInteger(
   value: string | null,
   fallback: number,
-  max: number,
+  max: number
 ): number | null {
   if (value === null) return fallback;
 
@@ -53,7 +52,6 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
 
     const page = parsePositiveInteger(searchParams.get("page"), 1, 1_000_000);
-
     const limit = parsePositiveInteger(searchParams.get("limit"), 10, 50);
 
     if (page === null) {
@@ -99,8 +97,30 @@ export async function GET(request: NextRequest) {
           applicantName: true,
           applicantEmail: true,
           coverLetter: true,
+          resumeStorageKey: true,
+          resumeFileName: true,
+          resumeMimeType: true,
+          resumeFileSize: true,
+          profileSnapshot: true,
           createdAt: true,
           updatedAt: true,
+
+          statusHistory: {
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              previousStatus: true,
+              newStatus: true,
+              reason: true,
+              createdAt: true,
+              changedBy: {
+                select: {
+                  name: true,
+                  role: true,
+                },
+              },
+            },
+          },
 
           resume: {
             select: {
@@ -135,6 +155,7 @@ export async function GET(request: NextRequest) {
                   slug: true,
                   logo: true,
                   location: true,
+                  verification: true,
                 },
               },
 
@@ -179,7 +200,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("GET /api/me/applications error:", error);
-
     return errorResponse("Failed to fetch applications", 500);
   }
 }

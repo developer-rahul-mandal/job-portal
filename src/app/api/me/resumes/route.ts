@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { writeFile, unlink } from "node:fs/promises";
 
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth/session";

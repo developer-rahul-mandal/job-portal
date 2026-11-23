@@ -132,6 +132,7 @@ export async function PATCH(request: NextRequest) {
     const input = body as Record<string, unknown>;
 
     const allowedFields = [
+      "name",
       "phone",
       "headline",
       "bio",
@@ -159,17 +160,51 @@ export async function PATCH(request: NextRequest) {
 
     const data: Prisma.UserProfileUpdateInput = {};
 
-    // Phone
-    if ("phone" in input) {
+    let updatedUser: { id: string; name: string | null; email: string } | null = null;
+
+    // Name
+    if ("name" in input) {
       if (
-        input.phone !== null &&
-        (typeof input.phone !== "string" || input.phone.trim().length > 20)
+        typeof input.name !== "string" ||
+        input.name.trim().length < 2 ||
+        input.name.trim().length > 150
       ) {
-        return errorResponse("Invalid phone number.", 400);
+        return errorResponse("Name must be between 2 and 150 characters.", 400);
       }
 
-      data.phone =
-        typeof input.phone === "string" ? input.phone.trim() || null : null;
+      updatedUser = await prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          name: input.name.trim(),
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      });
+    }
+
+    // Phone
+    if ("phone" in input) {
+      if (input.phone === null || input.phone === "") {
+        data.phone = null;
+      } else {
+        if (typeof input.phone !== "string") {
+          return errorResponse("Phone number must be a string.", 400);
+        }
+        const trimmedPhone = input.phone.trim();
+        // Strict numeric-only validation: digits 0-9 only, between 7 and 15 digits (preserves leading zeroes)
+        if (!/^\d{7,15}$/.test(trimmedPhone)) {
+          return errorResponse(
+            "Invalid phone number. Must contain digits only (7 to 15 digits) without letters or special characters.",
+            400,
+          );
+        }
+        data.phone = trimmedPhone;
+      }
     }
 
     // Headline
@@ -313,7 +348,14 @@ export async function PATCH(request: NextRequest) {
       {
         success: true,
         message: "Profile updated successfully.",
-        data: profile,
+        data: {
+          ...profile,
+          user: updatedUser ?? {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+          },
+        },
       },
       { status: 200 },
     );
