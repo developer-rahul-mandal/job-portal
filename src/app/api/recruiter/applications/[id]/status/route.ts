@@ -74,12 +74,9 @@ export async function PATCH(
       return errorResponse("Application not found.", 404);
     }
 
-    // Cross-company isolation
+    // Cross-company isolation: Return 404 instead of 403 to avoid leaking existence
     if (application.job.companyId !== company.id) {
-      return errorResponse(
-        "Unauthorized: This application belongs to another company organization.",
-        403
-      );
+      return errorResponse("Application not found.", 404);
     }
 
     // 2. Validate status transition with lifecycle rules
@@ -93,19 +90,25 @@ export async function PATCH(
       return errorResponse(validation.error || "Invalid status transition.", 400);
     }
 
-    // 3. Update application status and record audit history
+    // 3. Update application status with optimistic concurrency control and record audit history
+    let concurrencyConflict = false;
+
     const updated = await prisma.$transaction(async (tx) => {
-      const app = await tx.application.update({
-        where: { id: application.id },
+      // Optimistic lock: only update if status matches what we read earlier
+      const updateResult = await tx.application.updateMany({
+        where: {
+          id: application.id,
+          status: application.status,
+        },
         data: {
           status: targetStatus,
         },
-        select: {
-          id: true,
-          status: true,
-          updatedAt: true,
-        },
       });
+
+      if (updateResult.count === 0) {
+        concurrencyConflict = true;
+        throw new Error("CONCURRENCY_CONFLICT");
+      }
 
       await tx.applicationStatusHistory.create({
         data: {
@@ -117,8 +120,23 @@ export async function PATCH(
         },
       });
 
-      return app;
+      return {
+        id: application.id,
+        status: targetStatus,
+      };
+    }).catch((err) => {
+      if (concurrencyConflict || (err instanceof Error && err.message === "CONCURRENCY_CONFLICT")) {
+        return null;
+      }
+      throw err;
     });
+
+    if (concurrencyConflict || !updated) {
+      return errorResponse(
+        "Application status was modified by another user or session. Please refresh and try again.",
+        409
+      );
+    }
 
     // 4. Notify candidate asynchronously
     notifyApplicationStatusChanged({

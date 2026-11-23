@@ -45,10 +45,7 @@ export async function GET(request: NextRequest) {
       return errorResponse("Unauthorized", 401);
     }
 
-    if (user.role !== "APPLICANT") {
-      return errorResponse("Forbidden", 403);
-    }
-
+    // Any authenticated user can view their personal submitted applications
     const searchParams = request.nextUrl.searchParams;
 
     const page = parsePositiveInteger(searchParams.get("page"), 1, 1_000_000);
@@ -97,7 +94,7 @@ export async function GET(request: NextRequest) {
           applicantName: true,
           applicantEmail: true,
           coverLetter: true,
-          resumeStorageKey: true,
+          // resumeStorageKey omitted for security DTO
           resumeFileName: true,
           resumeMimeType: true,
           resumeFileSize: true,

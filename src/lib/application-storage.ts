@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   RESUME_STORAGE_DIR,
@@ -60,6 +60,16 @@ export async function preserveResumeForApplication(
   await copyFile(sourcePath, targetPath);
 
   return targetKey;
+}
+
+export async function deleteApplicationResume(key: string): Promise<void> {
+  if (!key || !isSafeApplicationResumeKey(key)) return;
+  try {
+    const filePath = getApplicationResumeFilePath(key);
+    await unlink(filePath);
+  } catch (err) {
+    // Silently ignore if file doesn't exist or already removed
+  }
 }
 
 export async function readApplicationResumeFromDisk(key: string): Promise<Buffer> {

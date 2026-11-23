@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
-import { preserveResumeForApplication } from "@/lib/application-storage";
+import {
+  preserveResumeForApplication,
+  deleteApplicationResume,
+} from "@/lib/application-storage";
 import {
   notifyApplicationSubmitted,
   notifyRecruiterNewApplication,
@@ -26,6 +29,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  let preservedStorageKey: string | null = null;
+
   try {
     // 1. Authenticate user using existing session cookie.
     const user = await getAuthenticatedUser(request);
@@ -91,7 +96,6 @@ export async function POST(
               select: {
                 user: { select: { email: true } },
               },
-              take: 1,
             },
           },
         },
@@ -216,7 +220,6 @@ export async function POST(
     };
 
     // 7. Preserve an immutable physical copy of the submitted resume
-    let preservedStorageKey: string | null = null;
     try {
       preservedStorageKey = await preserveResumeForApplication(resume.storageKey);
     } catch (storageErr) {
@@ -226,8 +229,26 @@ export async function POST(
 
     const applicantName = user.name?.trim() || user.email.split("@")[0];
 
-    // 8. Atomically create Application, create initial ApplicationStatusHistory, and increment Job.applicationCount
+    // 8. Atomically revalidate job state, create Application, create initial ApplicationStatusHistory, and increment applicationCount
     const createdApp = await prisma.$transaction(async (tx) => {
+      // Apply-time revalidation: ensure job is still published and active
+      const activeJob = await tx.job.findUnique({
+        where: { id: job.id },
+        select: { status: true, deadline: true, applicationMethod: true },
+      });
+
+      if (!activeJob || activeJob.status !== "PUBLISHED") {
+        throw new Error("JOB_UNAVAILABLE");
+      }
+
+      if (activeJob.deadline && activeJob.deadline <= new Date()) {
+        throw new Error("JOB_EXPIRED");
+      }
+
+      if (activeJob.applicationMethod !== "INTERNAL") {
+        throw new Error("JOB_NOT_INTERNAL");
+      }
+
       const application = await tx.application.create({
         data: {
           jobId: job.id,
@@ -276,11 +297,17 @@ export async function POST(
       companyName: job.company.name,
     }).catch((err) => console.error("notifyApplicationSubmitted error:", err));
 
-    const recruiterEmail =
-      job.company.recruiters[0]?.user.email || job.company.officialEmail;
-    if (recruiterEmail) {
+    const recruiterEmails = job.company.recruiters
+      .map((r) => r.user?.email)
+      .filter((e): e is string => Boolean(e));
+
+    if (recruiterEmails.length === 0 && job.company.officialEmail) {
+      recruiterEmails.push(job.company.officialEmail);
+    }
+
+    for (const email of recruiterEmails) {
       notifyRecruiterNewApplication({
-        recruiterEmail,
+        recruiterEmail: email,
         applicantName,
         jobTitle: job.title,
         companyName: job.company.name,
@@ -301,6 +328,25 @@ export async function POST(
       { status: 201 }
     );
   } catch (error) {
+    // If the transaction fails, clean up the preserved resume to prevent orphaned storage files
+    if (preservedStorageKey) {
+      deleteApplicationResume(preservedStorageKey).catch((cleanupErr) =>
+        console.warn("Failed to clean up orphaned resume file:", cleanupErr)
+      );
+    }
+
+    if (error instanceof Error) {
+      if (error.message === "JOB_UNAVAILABLE") {
+        return errorResponse("This job posting is no longer accepting applications.", 404);
+      }
+      if (error.message === "JOB_EXPIRED") {
+        return errorResponse("The application deadline for this position has passed.", 400);
+      }
+      if (error.message === "JOB_NOT_INTERNAL") {
+        return errorResponse("This job does not accept direct internal applications.", 400);
+      }
+    }
+
     if (isPrismaUniqueConstraintError(error)) {
       return errorResponse("You have already applied for this job.", 409);
     }

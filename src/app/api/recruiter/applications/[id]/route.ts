@@ -55,17 +55,18 @@ export async function GET(
       return errorResponse("Application not found.", 404);
     }
 
-    // Cross-company isolation: Confirm the job belongs to recruiter's company
+    // Cross-company isolation: Confirm the job belongs to recruiter's active company
+    // Return 404 to avoid leaking existence of applications belonging to other companies
     if (application.job.companyId !== company.id) {
-      return errorResponse(
-        "Unauthorized: This application belongs to another company organization.",
-        403
-      );
+      return errorResponse("Application not found.", 404);
     }
+
+    // Security DTO: Omit internal disk storage key from API responses
+    const { resumeStorageKey, ...safeApplication } = application;
 
     return NextResponse.json({
       success: true,
-      data: application,
+      data: safeApplication,
     });
   } catch (err) {
     console.error("GET /api/recruiter/applications/[id] error:", err);

@@ -19,10 +19,6 @@ export async function GET(
       return errorResponse("Unauthorized", 401);
     }
 
-    if (user.role !== "APPLICANT") {
-      return errorResponse("Forbidden", 403);
-    }
-
     const { id } = await params;
 
     if (!id) {
@@ -86,14 +82,17 @@ export async function GET(
       return errorResponse("Application not found", 404);
     }
 
-    // User ownership verification
+    // Ownership check: return 404 to avoid leaking existence of applications across users
     if (application.userId !== user.id) {
-      return errorResponse("Unauthorized: You do not own this application", 403);
+      return errorResponse("Application not found", 404);
     }
+
+    // Security DTO: omit internal disk storage key from API responses
+    const { resumeStorageKey, ...safeApplication } = application;
 
     return NextResponse.json({
       success: true,
-      data: application,
+      data: safeApplication,
     });
   } catch (err) {
     console.error("GET /api/me/applications/[id] error:", err);
