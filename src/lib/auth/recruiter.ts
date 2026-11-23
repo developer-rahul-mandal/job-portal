@@ -1,26 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getAuthenticatedUser, getServerSession, AuthenticatedUser } from "./session";
 import { prisma } from "@/lib/prisma";
 import { Company, CompanyRecruiter } from "@/generated/prisma/client";
+
+export type ActiveCompanySummary = {
+  id: string;
+  name: string;
+  slug: string;
+  logo: string | null;
+  verification: string;
+  membershipRole: string;
+  verificationStatus: string;
+};
 
 export type RecruiterContext = {
   user: AuthenticatedUser;
   membership: (CompanyRecruiter & { company: Company }) | null;
   company: Company | null;
+  activeCompanies: ActiveCompanySummary[];
 };
 
 /**
  * Validates recruiter authorization in React Server Components / server pages.
+ * Supports active company cookie and multiple company memberships without mutating global user role.
  */
 export async function getRecruiterSession(): Promise<RecruiterContext | null> {
   const user = await getServerSession();
   if (!user) return null;
 
-  if (user.role !== "RECRUITER" && user.role !== "ADMIN") {
-    return null;
-  }
-
-  const membership = await prisma.companyRecruiter.findFirst({
+  const memberships = await prisma.companyRecruiter.findMany({
     where: {
       userId: user.id,
       status: "ACTIVE",
@@ -28,12 +37,40 @@ export async function getRecruiterSession(): Promise<RecruiterContext | null> {
     include: {
       company: true,
     },
+    orderBy: { createdAt: "asc" },
   });
+
+  // Allow access if user is globally RECRUITER/ADMIN OR has active company memberships
+  if (user.role !== "RECRUITER" && user.role !== "ADMIN" && memberships.length === 0) {
+    return null;
+  }
+
+  let activeCompanyId: string | undefined;
+  try {
+    const cookieStore = await cookies();
+    activeCompanyId = cookieStore.get("active_company_id")?.value;
+  } catch {
+    // Ignore in contexts where cookies are not available
+  }
+
+  const selectedMembership =
+    memberships.find((m) => m.companyId === activeCompanyId) ||
+    memberships[0] ||
+    null;
 
   return {
     user,
-    membership,
-    company: membership?.company ?? null,
+    membership: selectedMembership,
+    company: selectedMembership?.company ?? null,
+    activeCompanies: memberships.map((m) => ({
+      id: m.company.id,
+      name: m.company.name,
+      slug: m.company.slug,
+      logo: m.company.logo,
+      verification: m.company.verification,
+      membershipRole: m.membershipRole,
+      verificationStatus: m.verificationStatus,
+    })),
   };
 }
 
@@ -48,7 +85,13 @@ export async function requireRecruiterApi(
     requireOwnerOrAdmin?: boolean;
   } = { requireCompany: true, requireOwnerOrAdmin: false }
 ): Promise<
-  | { success: true; user: AuthenticatedUser; membership: CompanyRecruiter & { company: Company }; company: Company }
+  | {
+      success: true;
+      user: AuthenticatedUser;
+      membership: CompanyRecruiter & { company: Company };
+      company: Company;
+      activeCompanies: ActiveCompanySummary[];
+    }
   | { success: false; response: NextResponse }
 > {
   const user = await getAuthenticatedUser(request);
@@ -63,7 +106,18 @@ export async function requireRecruiterApi(
     };
   }
 
-  if (user.role !== "RECRUITER" && user.role !== "ADMIN") {
+  const memberships = await prisma.companyRecruiter.findMany({
+    where: {
+      userId: user.id,
+      status: "ACTIVE",
+    },
+    include: {
+      company: true,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (user.role !== "RECRUITER" && user.role !== "ADMIN" && memberships.length === 0) {
     return {
       success: false,
       response: NextResponse.json(
@@ -73,15 +127,11 @@ export async function requireRecruiterApi(
     };
   }
 
-  const membership = await prisma.companyRecruiter.findFirst({
-    where: {
-      userId: user.id,
-      status: "ACTIVE",
-    },
-    include: {
-      company: true,
-    },
-  });
+  const activeCompanyId = request.cookies.get("active_company_id")?.value;
+  const membership =
+    memberships.find((m) => m.companyId === activeCompanyId) ||
+    memberships[0] ||
+    null;
 
   if (options.requireCompany && (!membership || !membership.company)) {
     return {
@@ -121,5 +171,14 @@ export async function requireRecruiterApi(
     user,
     membership: membership as CompanyRecruiter & { company: Company },
     company: membership?.company as Company,
+    activeCompanies: memberships.map((m) => ({
+      id: m.company.id,
+      name: m.company.name,
+      slug: m.company.slug,
+      logo: m.company.logo,
+      verification: m.company.verification,
+      membershipRole: m.membershipRole,
+      verificationStatus: m.verificationStatus,
+    })),
   };
 }

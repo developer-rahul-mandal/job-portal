@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getServerSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/prisma";
+import { getRecruiterSession } from "@/lib/auth/recruiter";
 import RecruiterNav from "@/components/recruiter/recruiter-nav";
 import LogoutButton from "@/components/auth/logout-button";
 import ThemeToggle from "@/components/theme/theme-toggle";
@@ -16,25 +16,10 @@ export default async function RecruiterLayout({
     redirect("/login?redirect=/recruiter/dashboard");
   }
 
-  // Cross-role boundary enforcement:
-  // Applicants are strictly forbidden from accessing recruiter workspaces.
-  if (user.role === "APPLICANT") {
-    redirect("/dashboard");
-  }
+  const recruiterContext = await getRecruiterSession();
 
-  // Look up active company membership
-  const membership = await prisma.companyRecruiter.findFirst({
-    where: {
-      userId: user.id,
-      status: "ACTIVE",
-    },
-    include: {
-      company: true,
-    },
-  });
-
-  // If recruiter has no active company, they must complete onboarding
-  if (!membership || !membership.company) {
+  // If user has no active company membership and is not ADMIN, show onboarding experience
+  if (!recruiterContext?.membership || !recruiterContext.company) {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col">
         {/* Simple Onboarding Topbar */}
@@ -58,6 +43,8 @@ export default async function RecruiterLayout({
     );
   }
 
+  const { membership, company, activeCompanies } = recruiterContext;
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col lg:flex-row">
       <RecruiterNav
@@ -68,20 +55,21 @@ export default async function RecruiterLayout({
           role: user.role,
         }}
         company={{
-          id: membership.company.id,
-          name: membership.company.name,
-          slug: membership.company.slug,
-          logo: membership.company.logo,
-          verification: membership.company.verification,
+          id: company.id,
+          name: company.name,
+          slug: company.slug,
+          logo: company.logo,
+          verification: company.verification,
         }}
         membershipRole={membership.membershipRole}
+        activeCompanies={activeCompanies}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Mobile top bar with user info, theme toggle & logout */}
         <header className="lg:hidden px-4 py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-xs text-zinc-500">{membership.company.name}</p>
+            <p className="text-xs text-zinc-500">{company.name}</p>
             <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
               {user.name || user.email}
             </p>

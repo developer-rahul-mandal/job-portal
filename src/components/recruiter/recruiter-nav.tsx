@@ -1,9 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import LogoutButton from "@/components/auth/logout-button";
 import ThemeToggle from "@/components/theme/theme-toggle";
+
+type CompanyItem = {
+  id: string;
+  name: string;
+  slug: string;
+  logo?: string | null;
+  verification: string;
+  membershipRole?: string;
+  verificationStatus?: string;
+};
 
 type RecruiterNavProps = {
   user: {
@@ -20,6 +31,7 @@ type RecruiterNavProps = {
     verification: string;
   };
   membershipRole: string;
+  activeCompanies?: CompanyItem[];
 };
 
 const navItems = [
@@ -75,8 +87,15 @@ const navItems = [
   },
 ];
 
-export default function RecruiterNav({ user, company, membershipRole }: RecruiterNavProps) {
+export default function RecruiterNav({
+  user,
+  company,
+  membershipRole,
+  activeCompanies = [],
+}: RecruiterNavProps) {
   const pathname = usePathname();
+  const [switching, setSwitching] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const isLinkActive = (item: (typeof navItems)[number]) => {
     if (item.exact) {
@@ -85,13 +104,35 @@ export default function RecruiterNav({ user, company, membershipRole }: Recruite
     return pathname.startsWith(item.href);
   };
 
+  const handleSwitchCompany = async (targetCompanyId: string) => {
+    if (targetCompanyId === company.id || switching) return;
+    setSwitching(true);
+    try {
+      const res = await fetch("/api/recruiter/company/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId: targetCompanyId }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      } else {
+        alert("Could not switch company.");
+      }
+    } catch {
+      alert("Network error switching company.");
+    } finally {
+      setSwitching(false);
+      setDropdownOpen(false);
+    }
+  };
+
   return (
     <aside className="w-full lg:w-64 flex-shrink-0 bg-white dark:bg-zinc-900 border-b lg:border-b-0 lg:border-r border-zinc-200 dark:border-zinc-800 flex flex-col justify-between">
       <div>
-        {/* Workspace Brand / Header */}
-        <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800">
+        {/* Workspace Brand / Header with Company Switcher */}
+        <div className="p-4 sm:p-5 border-b border-zinc-200 dark:border-zinc-800 relative">
           <div className="flex items-center justify-between gap-3">
-            <Link href="/recruiter/dashboard" className="flex items-center gap-3 min-w-0 group">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0">
                 {company.logo ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -105,9 +146,28 @@ export default function RecruiterNav({ user, company, membershipRole }: Recruite
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <span className="font-bold text-zinc-900 dark:text-zinc-100 text-sm truncate block group-hover:text-blue-600 dark:group-hover:text-blue-400 transition">
-                  {company.name}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-zinc-900 dark:text-zinc-100 text-sm truncate block">
+                    {company.name}
+                  </span>
+                  {activeCompanies.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setDropdownOpen(!dropdownOpen)}
+                      className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded transition"
+                      title="Switch company"
+                    >
+                      <svg
+                        className={`w-3.5 h-3.5 transition-transform ${dropdownOpen ? "rotate-180" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-[10px] uppercase font-semibold px-1.5 py-0.2 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
                     {membershipRole}
@@ -123,12 +183,39 @@ export default function RecruiterNav({ user, company, membershipRole }: Recruite
                   )}
                 </div>
               </div>
-            </Link>
+            </div>
 
             <div className="lg:hidden shrink-0">
               <ThemeToggle variant="dropdown" />
             </div>
           </div>
+
+          {/* Company Switcher Dropdown */}
+          {dropdownOpen && activeCompanies.length > 1 && (
+            <div className="absolute left-4 right-4 top-full mt-1 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-lg z-50 p-2 space-y-1">
+              <p className="text-[10px] uppercase tracking-wider text-zinc-400 font-semibold px-2 py-1">
+                Switch Organization
+              </p>
+              {activeCompanies.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  disabled={switching || c.id === company.id}
+                  onClick={() => handleSwitchCompany(c.id)}
+                  className={`w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium flex items-center justify-between transition ${
+                    c.id === company.id
+                      ? "bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-semibold cursor-default"
+                      : "text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700/60"
+                  }`}
+                >
+                  <span className="truncate">{c.name}</span>
+                  {c.id === company.id && (
+                    <span className="text-[10px] text-blue-600 dark:text-blue-400 font-bold ml-2">Active</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Navigation Links */}
