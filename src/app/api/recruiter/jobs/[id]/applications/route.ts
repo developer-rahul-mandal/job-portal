@@ -52,12 +52,9 @@ export async function GET(
       return errorResponse("Job not found.", 404);
     }
 
-    // Cross-company isolation
+    // Cross-company isolation (return 404 to avoid leaking job existence)
     if (job.companyId !== company.id) {
-      return errorResponse(
-        "Unauthorized: This job belongs to another company organization.",
-        403
-      );
+      return errorResponse("Job not found.", 404);
     }
 
     // 3. Parse query filters and pagination

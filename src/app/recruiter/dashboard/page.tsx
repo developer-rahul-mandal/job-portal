@@ -1,82 +1,84 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getServerSession } from "@/lib/auth/session";
+import { getRecruiterSession } from "@/lib/auth/recruiter";
 import { prisma } from "@/lib/prisma";
+import VerificationCards from "@/components/recruiter/verification-cards";
 
 export const metadata = {
   title: "Recruiter Dashboard — JobPortal",
 };
 
 export default async function RecruiterDashboardPage() {
-  const user = await getServerSession();
+  const session = await getRecruiterSession();
 
-  if (!user) {
-    redirect("/login?redirect=/recruiter/dashboard");
-  }
-
-  // Look up active company membership
-  const membership = await prisma.companyRecruiter.findFirst({
-    where: {
-      userId: user.id,
-      status: "ACTIVE",
-    },
-    include: {
-      company: true,
-    },
-  });
-
-  if (!membership || !membership.company) {
+  if (!session || !session.company || !session.membership) {
     redirect("/recruiter/onboarding");
   }
 
-  const { company } = membership;
+  const { company, membership, user } = session;
   const now = new Date();
 
-  // Metrics query
-  const [activeJobsCount, draftJobsCount, totalJobsCount, stats, recentJobs, teamCount] =
-    await Promise.all([
-      prisma.job.count({
-        where: {
-          companyId: company.id,
-          status: "PUBLISHED",
-          OR: [{ deadline: null }, { deadline: { gt: now } }],
+  // Authoritative metrics query
+  const [
+    activeJobsCount,
+    draftJobsCount,
+    totalJobsCount,
+    totalApplications,
+    applyClicksData,
+    recentJobs,
+    teamCount,
+  ] = await Promise.all([
+    prisma.job.count({
+      where: {
+        companyId: company.id,
+        status: "PUBLISHED",
+        OR: [{ deadline: null }, { deadline: { gt: now } }],
+      },
+    }),
+    prisma.job.count({
+      where: {
+        companyId: company.id,
+        status: "DRAFT",
+      },
+    }),
+    prisma.job.count({
+      where: {
+        companyId: company.id,
+      },
+    }),
+    // Authoritative total application count from Application table
+    prisma.application.count({
+      where: {
+        job: { companyId: company.id },
+      },
+    }),
+    prisma.job.aggregate({
+      where: { companyId: company.id },
+      _sum: {
+        applyClickCount: true,
+      },
+    }),
+    prisma.job.findMany({
+      where: { companyId: company.id },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      include: {
+        category: {
+          select: { name: true },
         },
-      }),
-      prisma.job.count({
-        where: {
-          companyId: company.id,
-          status: "DRAFT",
-        },
-      }),
-      prisma.job.count({
-        where: {
-          companyId: company.id,
-        },
-      }),
-      prisma.job.aggregate({
-        where: { companyId: company.id },
-        _sum: {
-          applicationCount: true,
-          applyClickCount: true,
-        },
-      }),
-      prisma.job.findMany({
-        where: { companyId: company.id },
-        orderBy: { createdAt: "desc" },
-        take: 5,
-        include: {
-          category: {
-            select: { name: true },
-          },
-        },
-      }),
-      prisma.companyRecruiter.count({
-        where: { companyId: company.id, status: "ACTIVE" },
-      }),
-    ]);
+      },
+    }),
+    prisma.companyRecruiter.count({
+      where: { companyId: company.id, status: "ACTIVE" },
+    }),
+  ]);
 
-  const totalApplications = stats._sum.applicationCount ?? 0;
-  const totalApplyClicks = stats._sum.applyClickCount ?? 0;
+  const totalApplyClicks = applyClicksData._sum.applyClickCount ?? 0;
+
+  const canEditCompany =
+    membership.membershipRole === "OWNER" ||
+    membership.membershipRole === "ADMIN" ||
+    user.role === "ADMIN";
 
   return (
     <div className="space-y-8">
@@ -106,7 +108,7 @@ export default async function RecruiterDashboardPage() {
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                    Verification Pending
+                    {company.verification === "PENDING" ? "Verification Pending" : "Unverified Employer"}
                   </span>
                 )}
               </div>
@@ -135,22 +137,23 @@ export default async function RecruiterDashboardPage() {
             </Link>
           </div>
         </div>
-
-        {/* Verification Alert Banner if unverified */}
-        {company.verification !== "VERIFIED" && (
-          <div className="mt-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs sm:text-sm text-amber-900 dark:text-amber-200 flex items-start gap-3">
-            <svg className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <div>
-              <p className="font-semibold">Company Verification Under Review</p>
-              <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
-                Your company profile is unverified. You can draft and publish jobs, but obtaining verified employer status adds the verified badge on all public listings.
-              </p>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Verification Status Cards */}
+      <VerificationCards
+        company={{
+          id: company.id,
+          name: company.name,
+          verification: company.verification,
+        }}
+        membership={{
+          id: membership.id,
+          membershipRole: membership.membershipRole,
+          verificationStatus: membership.verificationStatus,
+          rejectionReason: membership.rejectionReason,
+        }}
+        canManageCompany={canEditCompany}
+      />
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">

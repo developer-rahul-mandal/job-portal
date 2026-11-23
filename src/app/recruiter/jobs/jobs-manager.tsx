@@ -273,7 +273,7 @@ export default function JobsManager({
                       {/* Metrics */}
                       <td className="py-4 px-4 whitespace-nowrap text-center">
                         <Link
-                          href={`/recruiter/jobs/${job.id}/applications`}
+                          href={`/recruiter/jobs/${job.slug}/applications`}
                           className="font-bold text-blue-600 dark:text-blue-400 hover:underline text-xs inline-block"
                           title="View applicants in ATS"
                         >
@@ -312,7 +312,7 @@ export default function JobsManager({
 
                         {/* View Candidates in ATS */}
                         <Link
-                          href={`/recruiter/jobs/${job.id}/applications`}
+                          href={`/recruiter/jobs/${job.slug}/applications`}
                           className="p-1.5 rounded-lg text-zinc-500 hover:text-blue-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 inline-block transition-colors"
                           title="View applicants / ATS pipeline"
                         >

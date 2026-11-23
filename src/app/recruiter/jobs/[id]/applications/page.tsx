@@ -49,6 +49,9 @@ export default async function RecruiterJobApplicationsPage({
       location: true,
       status: true,
       applicationMethod: true,
+      applicationUrl: true,
+      applicationEmail: true,
+      applyClickCount: true,
       companyId: true,
       company: {
         select: {
@@ -63,16 +66,18 @@ export default async function RecruiterJobApplicationsPage({
     notFound();
   }
 
-  // Multi-tenant check: Company must match
+  // Multi-tenant check: Company must match active company context
+  // Return 404 to avoid leaking job existence across organizations
   if (job.companyId !== company.id) {
-    redirect("/recruiter/jobs");
+    notFound();
   }
 
-  // 2. Parse search parameters
+  // 2. Parse search parameters safely (prevent NaN on invalid page numbers)
   const queryParams = await searchParams;
   const statusParam = queryParams.status?.toUpperCase() || "";
   const queryParam = queryParams.q?.trim() || "";
-  const page = Math.max(1, parseInt(queryParams.page || "1", 10));
+  const rawPage = Number.parseInt(String(queryParams.page ?? "1"), 10);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 1;
   const limit = 10;
   const skip = (page - 1) * limit;
 
@@ -91,7 +96,8 @@ export default async function RecruiterJobApplicationsPage({
     ];
   }
 
-  const [total, applications] = await Promise.all([
+  const [totalAllApplications, total, applications] = await Promise.all([
+    prisma.application.count({ where: { jobId: job.id } }),
     prisma.application.count({ where }),
     prisma.application.findMany({
       where,
@@ -154,6 +160,9 @@ export default async function RecruiterJobApplicationsPage({
         location: job.location,
         status: job.status,
         applicationMethod: job.applicationMethod,
+        applicationUrl: job.applicationUrl,
+        applicationEmail: job.applicationEmail,
+        applyClickCount: job.applyClickCount,
         company: job.company,
       }}
       initialApplications={formattedApplications}
@@ -162,6 +171,7 @@ export default async function RecruiterJobApplicationsPage({
         limit,
         total,
         totalPages,
+        totalAll: totalAllApplications,
       }}
       currentStatus={statusParam}
       currentQuery={queryParam}
