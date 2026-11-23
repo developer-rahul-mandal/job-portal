@@ -202,14 +202,14 @@ export async function PATCH(
       data.deadline = body.deadline ? new Date(body.deadline) : null;
     }
 
-    // Status management: DRAFT, PUBLISHED, CLOSED (enforcing moderation verification)
+    // Status management: DRAFT, PENDING_REVIEW, PUBLISHED, CLOSED (enforcing moderation verification)
     if ("status" in body) {
       let newStatus = body.status as JobStatus;
-      const validStatuses: JobStatus[] = ["DRAFT", "PUBLISHED", "CLOSED"];
+      const validStatuses: JobStatus[] = ["DRAFT", "PENDING_REVIEW", "PUBLISHED", "CLOSED"];
       if (!validStatuses.includes(newStatus)) {
         return errorResponse("Invalid status update.", 400);
       }
-      if (newStatus === "PUBLISHED" && company.verification !== "VERIFIED" && user.role !== "ADMIN") {
+      if (newStatus === "PUBLISHED" && user.role !== "ADMIN") {
         newStatus = "PENDING_REVIEW";
       }
       data.status = newStatus;
@@ -220,6 +220,9 @@ export async function PATCH(
       if (newStatus === "CLOSED") {
         data.closedAt = new Date();
       }
+    } else if (existingJob.status === "PUBLISHED" && user.role !== "ADMIN") {
+      // Content modification on a published job resets it to PENDING_REVIEW for re-moderation
+      data.status = "PENDING_REVIEW";
     }
 
     const updatedJob = await prisma.job.update({

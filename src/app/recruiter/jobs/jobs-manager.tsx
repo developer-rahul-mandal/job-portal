@@ -53,7 +53,9 @@ export default function JobsManager({
   const statusTabs = [
     { label: "All Jobs", value: "" },
     { label: "Published", value: "PUBLISHED" },
+    { label: "Pending Review", value: "PENDING_REVIEW" },
     { label: "Drafts", value: "DRAFT" },
+    { label: "Rejected", value: "REJECTED" },
     { label: "Closed", value: "CLOSED" },
     { label: "Expired", value: "EXPIRED" },
   ];
@@ -83,7 +85,7 @@ export default function JobsManager({
     router.push(`/recruiter/jobs?${params.toString()}`);
   }
 
-  async function handleStatusChange(jobId: string, newStatus: "PUBLISHED" | "CLOSED") {
+  async function handleStatusChange(jobId: string, newStatus: "PUBLISHED" | "PENDING_REVIEW" | "CLOSED") {
     setActionLoading(jobId);
     setError(null);
     try {
@@ -330,17 +332,17 @@ export default function JobsManager({
                           </svg>
                         </Link>
 
-                        {/* Quick Publish if Draft */}
-                        {job.status === "DRAFT" && (
+                        {/* Submit for Review if Draft or Rejected */}
+                        {(job.status === "DRAFT" || job.status === "REJECTED") && (
                           <button
                             type="button"
                             disabled={isActionBusy}
-                            onClick={() => handleStatusChange(job.id, "PUBLISHED")}
-                            className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 inline-block transition-colors disabled:opacity-50"
-                            title="Publish job now"
+                            onClick={() => handleStatusChange(job.id, "PENDING_REVIEW")}
+                            className="p-1.5 rounded-lg text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 inline-block transition-colors disabled:opacity-50"
+                            title="Submit for review & publication"
                           >
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                           </button>
                         )}

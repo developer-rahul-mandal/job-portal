@@ -132,7 +132,7 @@ export default function JobWizard({ categories, company }: JobWizardProps) {
     setStep((prev) => Math.max(1, prev - 1));
   }
 
-  async function handleFinalSubmit(publishStatus: "DRAFT" | "PUBLISHED") {
+  async function handleFinalSubmit(publishStatus: "DRAFT" | "PENDING_REVIEW") {
     if (!validateStep(1) || !validateStep(2) || !validateStep(3) || !validateStep(4)) {
       return;
     }
@@ -876,7 +876,7 @@ export default function JobWizard({ categories, company }: JobWizardProps) {
               <button
                 type="button"
                 disabled={loading}
-                onClick={() => handleFinalSubmit("PUBLISHED")}
+                onClick={() => handleFinalSubmit("PENDING_REVIEW")}
                 className="px-6 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm transition-colors shadow-xs disabled:opacity-50 inline-flex items-center gap-2"
               >
                 {loading ? (
@@ -888,7 +888,7 @@ export default function JobWizard({ categories, company }: JobWizardProps) {
                     Processing...
                   </>
                 ) : (
-                  "Publish Job Immediately 🚀"
+                  "Submit for Review & Publish 🚀"
                 )}
               </button>
             </>

@@ -267,13 +267,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Status: allow DRAFT or PUBLISHED (subject to company moderation verification)
+    // Status moderation enforcement:
+    // Recruiters cannot directly publish. All publications require admin review.
     let targetStatus: JobStatus = "DRAFT";
-    if (status === "PUBLISHED") {
-      targetStatus =
-        company.verification === "VERIFIED" || user.role === "ADMIN"
-          ? "PUBLISHED"
-          : "PENDING_REVIEW";
+    if (status === "PUBLISHED" || status === "PENDING_REVIEW") {
+      targetStatus = user.role === "ADMIN" ? "PUBLISHED" : "PENDING_REVIEW";
     }
     const publishedAt = targetStatus === "PUBLISHED" ? new Date() : null;
 
