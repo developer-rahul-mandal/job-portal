@@ -47,26 +47,31 @@ export default function OnboardingForm() {
   // Search effect
   useEffect(() => {
     if (mode !== "join" || searchQuery.trim().length < 2) {
-      setSearchResults([]);
       return;
     }
 
+    let active = true;
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
         const res = await fetch(`/api/recruiter/company/discover?q=${encodeURIComponent(searchQuery.trim())}`);
-        if (res.ok) {
+        if (res.ok && active) {
           const data = await res.json();
           setSearchResults(data.data || []);
         }
       } catch (err) {
         console.error("Company search error:", err);
       } finally {
-        setIsSearching(false);
+        if (active) {
+          setIsSearching(false);
+        }
       }
     }, 300);
 
-    return () => clearTimeout(timer);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, [searchQuery, mode]);
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
@@ -367,7 +372,12 @@ export default function OnboardingForm() {
                 id="search"
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  if (e.target.value.trim().length < 2) {
+                    setSearchResults([]);
+                  }
+                }}
                 placeholder="Type at least 2 characters (e.g., Acme, google.com)..."
                 className="w-full px-3.5 py-2.5 text-sm rounded-xl bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />

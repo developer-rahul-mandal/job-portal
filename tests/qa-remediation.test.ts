@@ -186,7 +186,8 @@ describe("QA Remediation Test Suite", () => {
       };
 
       // Simulating DTO sanitization
-      const { resumeStorageKey, ...safeDto } = dbApplication;
+      const safeDto = { ...dbApplication };
+      delete (safeDto as { resumeStorageKey?: string }).resumeStorageKey;
 
       expect(safeDto).not.toHaveProperty("resumeStorageKey");
       expect(safeDto.resumeFileName).toBe("Jane_Resume.pdf");

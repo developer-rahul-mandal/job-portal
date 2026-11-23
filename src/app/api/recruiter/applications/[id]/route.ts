@@ -62,7 +62,8 @@ export async function GET(
     }
 
     // Security DTO: Omit internal disk storage key from API responses
-    const { resumeStorageKey, ...safeApplication } = application;
+    const safeApplication = { ...application };
+    delete (safeApplication as { resumeStorageKey?: string | null }).resumeStorageKey;
 
     return NextResponse.json({
       success: true,

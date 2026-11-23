@@ -67,7 +67,7 @@ export async function deleteApplicationResume(key: string): Promise<void> {
   try {
     const filePath = getApplicationResumeFilePath(key);
     await unlink(filePath);
-  } catch (err) {
+  } catch {
     // Silently ignore if file doesn't exist or already removed
   }
 }
