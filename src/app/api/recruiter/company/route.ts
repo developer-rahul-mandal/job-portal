@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireRecruiterApi } from "@/lib/auth/recruiter";
 import { prisma } from "@/lib/prisma";
+import { normalizeCompanyDomain } from "@/lib/company-domain";
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json({ success: false, message }, { status });
@@ -60,6 +61,7 @@ export async function GET(request: NextRequest) {
     data: {
       company,
       membershipRole: membership.membershipRole,
+      verificationStatus: membership.verificationStatus,
       stats: {
         totalJobs,
         activeJobs,
@@ -73,21 +75,13 @@ export async function GET(request: NextRequest) {
 
 // ======================================================
 // POST /api/recruiter/company
-// Creates a new company for a recruiter who has no company (Onboarding)
+// Creates a new company for a recruiter with domain deduplication & active cookie
 // ======================================================
 export async function POST(request: NextRequest) {
   const auth = await requireRecruiterApi(request, { requireCompany: false });
   if (!auth.success) return auth.response;
 
-  const { user, membership } = auth;
-
-  // Prevent multiple companies per user if already active
-  if (membership && membership.status === "ACTIVE") {
-    return errorResponse(
-      `You are already an active member of "${membership.company.name}".`,
-      400
-    );
-  }
+  const { user } = auth;
 
   try {
     const body = await request.json();
@@ -139,6 +133,36 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Domain normalization & deduplication check
+    const normalizedDomain = normalizeCompanyDomain(cleanWebsite, cleanEmail);
+
+    if (normalizedDomain) {
+      const existingDomainCompany = await prisma.company.findFirst({
+        where: { normalizedDomain },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          logo: true,
+          industry: true,
+          location: true,
+          verification: true,
+        },
+      });
+
+      if (existingDomainCompany) {
+        return NextResponse.json(
+          {
+            success: false,
+            duplicateFound: true,
+            message: `An organization with the domain "${normalizedDomain}" already exists ("${existingDomainCompany.name}"). You can request to join it instead.`,
+            existingCompany: existingDomainCompany,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const slug = generateSlug(name);
 
     // Atomically create company and recruiter membership
@@ -152,6 +176,7 @@ export async function POST(request: NextRequest) {
           location: location?.trim() || null,
           website: cleanWebsite,
           officialEmail: cleanEmail,
+          normalizedDomain,
           verification: "UNVERIFIED",
         },
       });
@@ -162,13 +187,14 @@ export async function POST(request: NextRequest) {
           companyId: newCompany.id,
           membershipRole: "OWNER",
           status: "ACTIVE",
+          verificationStatus: "UNVERIFIED",
         },
       });
 
       return { company: newCompany, membership: newMembership };
     });
 
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         success: true,
         message: "Company created successfully and recruiter assigned as Owner.",
@@ -176,6 +202,17 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
+
+    // Set newly created company as the active company
+    response.cookies.set("active_company_id", result.company.id, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+
+    return response;
   } catch (err) {
     console.error("POST_RECRUITER_COMPANY_ERROR:", err);
     return errorResponse("Failed to create company.", 500);
@@ -206,6 +243,7 @@ export async function PATCH(request: NextRequest) {
       location?: string | null;
       website?: string | null;
       officialEmail?: string | null;
+      normalizedDomain?: string | null;
     } = {};
 
     if ("name" in body) {
@@ -236,6 +274,7 @@ export async function PATCH(request: NextRequest) {
       data.location = location?.trim() || null;
     }
 
+    let nextWebsite = company.website;
     if ("website" in body) {
       if (website !== null && website !== "") {
         let clean = String(website).trim();
@@ -251,11 +290,14 @@ export async function PATCH(request: NextRequest) {
           return errorResponse("Website URL cannot exceed 500 characters.", 400);
         }
         data.website = clean;
+        nextWebsite = clean;
       } else {
         data.website = null;
+        nextWebsite = null;
       }
     }
 
+    let nextEmail = company.officialEmail;
     if ("officialEmail" in body) {
       if (officialEmail !== null && officialEmail !== "") {
         const clean = String(officialEmail).trim().toLowerCase();
@@ -263,9 +305,15 @@ export async function PATCH(request: NextRequest) {
           return errorResponse("Invalid official company email address.", 400);
         }
         data.officialEmail = clean;
+        nextEmail = clean;
       } else {
         data.officialEmail = null;
+        nextEmail = null;
       }
+    }
+
+    if ("website" in body || "officialEmail" in body) {
+      data.normalizedDomain = normalizeCompanyDomain(nextWebsite, nextEmail);
     }
 
     const updated = await prisma.company.update({
