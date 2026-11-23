@@ -95,6 +95,27 @@ enum SkillSuggestionStatus {
   REJECTED
 }
 
+enum RecruiterVerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // ======================================================
 // USER & AUTHENTICATION
 // ======================================================
@@ -126,6 +147,14 @@ model User {
 
   applications Application[]
   applicationStatusChanges ApplicationStatusHistory[] @relation("ApplicationStatusChanges")
+
+  // Recruiter & Moderation Relations
+  reviewedRecruiters             CompanyRecruiter[]                    @relation("RecruiterReviewer")
+  companyJoinRequests            CompanyJoinRequest[]
+  sentCompanyInvitations         CompanyInvitation[]                   @relation("SentCompanyInvitations")
+  reviewedCompanyVerifications   CompanyVerificationHistory[]          @relation("CompanyVerificationReviewer")
+  reviewedRecruiterVerifications CompanyRecruiterVerificationHistory[] @relation("RecruiterVerificationReviewer")
+  reviewedJobModerations         JobModerationHistory[]                @relation("JobModerationReviewer")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -211,38 +240,50 @@ model Category {
 // ======================================================
 
 model Company {
-  id            String                    @id @default(cuid())
-  name          String                    @db.VarChar(150)
-  slug          String                    @unique @db.VarChar(180)
-  overview      String?                   @db.VarChar(300)
-  industry      String?                   @db.VarChar(100)
-  logo          String?                   @db.VarChar(500)
-  website       String?                   @db.VarChar(500)
-  officialEmail String?                   @db.VarChar(254)
-  location      String?                   @db.VarChar(150)
-  verification  CompanyVerificationStatus @default(UNVERIFIED)
-  rating        Decimal?                  @db.Decimal(2, 1)
+  id               String                    @id @default(cuid())
+  name             String                    @db.VarChar(150)
+  slug             String                    @unique @db.VarChar(180)
+  overview         String?                   @db.VarChar(300)
+  industry         String?                   @db.VarChar(100)
+  logo             String?                   @db.VarChar(500)
+  website          String?                   @db.VarChar(500)
+  officialEmail    String?                   @db.VarChar(254)
+  normalizedDomain String?                   @db.VarChar(255)
+  location         String?                   @db.VarChar(150)
+  verification     CompanyVerificationStatus @default(UNVERIFIED)
+  rating           Decimal?                  @db.Decimal(2, 1)
 
-  jobs       Job[]
-  recruiters CompanyRecruiter[]
+  jobs                Job[]
+  recruiters          CompanyRecruiter[]
+  joinRequests        CompanyJoinRequest[]
+  invitations         CompanyInvitation[]
+  verificationHistory CompanyVerificationHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([name])
   @@index([verification])
+  @@index([normalizedDomain])
 }
 
 model CompanyRecruiter {
-  id             String                  @id @default(cuid())
-  userId         String
-  companyId      String
-  membershipRole CompanyMembershipRole   @default(RECRUITER)
-  status         CompanyMembershipStatus @default(PENDING)
+  id                 String                      @id @default(cuid())
+  userId             String
+  companyId          String
+  membershipRole     CompanyMembershipRole       @default(RECRUITER)
+  status             CompanyMembershipStatus     @default(PENDING)
+  verificationStatus RecruiterVerificationStatus @default(UNVERIFIED)
+  verifiedAt         DateTime?
+  rejectedAt         DateTime?
+  rejectionReason    String?                     @db.VarChar(500)
+  reviewedById       String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User                                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company    Company                               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewedBy User?                                 @relation("RecruiterReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  verificationHistory CompanyRecruiterVerificationHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -250,6 +291,9 @@ model CompanyRecruiter {
   @@unique([userId, companyId])
   @@index([companyId, status])
   @@index([userId, status])
+  @@index([companyId, verificationStatus])
+  @@index([userId, verificationStatus])
+  @@index([reviewedById])
 }
 
 // ======================================================
@@ -293,7 +337,8 @@ model Job {
   ogImageAlt    String? @db.VarChar(125)
   ogType        String  @default("website") @db.VarChar(30)
 
-  status JobStatus @default(DRAFT)
+  status          JobStatus @default(DRAFT)
+  rejectionReason String?   @db.VarChar(500)
 
   applicationMethod ApplicationMethod @default(EXTERNAL)
   applicationUrl    String?           @db.VarChar(1000)
@@ -319,8 +364,9 @@ model Job {
 
   postedBy User @relation("JobPostedBy", fields: [postedById], references: [id], onDelete: Restrict)
 
-  applications Application[]
-  savedByUsers SavedJob[]
+  applications      Application[]
+  savedByUsers      SavedJob[]
+  moderationHistory JobModerationHistory[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -559,4 +605,95 @@ model SkillSuggestion {
   user User @relation(fields: [suggestedBy], references: [id], onDelete: Cascade)
 
   @@index([status])
+}
+
+// ======================================================
+// RECRUITER, COMPANY & JOB MODERATION
+// ======================================================
+
+model CompanyJoinRequest {
+  id           String            @id @default(cuid())
+  companyId    String
+  userId       String
+  status       JoinRequestStatus @default(PENDING)
+  notes        String?           @db.VarChar(500)
+  reviewedById String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId, status])
+  @@index([companyId, status])
+  @@index([userId, status])
+}
+
+model CompanyInvitation {
+  id          String                @id @default(cuid())
+  companyId   String
+  email       String                @db.VarChar(254)
+  role        CompanyMembershipRole @default(RECRUITER)
+  token       String                @unique @db.VarChar(128)
+  status      InvitationStatus      @default(PENDING)
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invitedBy User    @relation("SentCompanyInvitations", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([email, status])
+  @@index([token])
+}
+
+model CompanyVerificationHistory {
+  id             String                    @id @default(cuid())
+  companyId      String
+  previousStatus CompanyVerificationStatus?
+  newStatus      CompanyVerificationStatus
+  reviewedById   String
+  reason         String?                   @db.VarChar(500)
+  createdAt      DateTime                  @default(now())
+
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reviewedBy User    @relation("CompanyVerificationReviewer", fields: [reviewedById], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([reviewedById])
+}
+
+model CompanyRecruiterVerificationHistory {
+  id             String                       @id @default(cuid())
+  recruiterId    String
+  previousStatus RecruiterVerificationStatus?
+  newStatus      RecruiterVerificationStatus
+  reviewedById   String
+  reason         String?                      @db.VarChar(500)
+  createdAt      DateTime                     @default(now())
+
+  recruiter  CompanyRecruiter @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
+  reviewedBy User             @relation("RecruiterVerificationReviewer", fields: [reviewedById], references: [id], onDelete: Cascade)
+
+  @@index([recruiterId, createdAt])
+  @@index([reviewedById])
+}
+
+model JobModerationHistory {
+  id             String     @id @default(cuid())
+  jobId          String
+  previousStatus JobStatus?
+  newStatus      JobStatus
+  reviewedById   String
+  reason         String?    @db.VarChar(500)
+  createdAt      DateTime   @default(now())
+
+  job        Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  reviewedBy User @relation("JobModerationReviewer", fields: [reviewedById], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@index([reviewedById])
 }
