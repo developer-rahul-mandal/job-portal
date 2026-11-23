@@ -5,6 +5,16 @@ const isResendConfigured = Boolean(apiKey && apiKey.startsWith("re_"));
 const resend = isResendConfigured ? new Resend(apiKey) : null;
 const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 
+export function escapeHtml(unsafe: string | null | undefined): string {
+  if (!unsafe) return "";
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export interface ApplicationSubmittedNotification {
   applicantEmail: string;
   applicantName: string;
@@ -13,7 +23,7 @@ export interface ApplicationSubmittedNotification {
 }
 
 export interface RecruiterNewApplicantNotification {
-  recruiterEmail: string;
+  recruiterEmail: string | string[];
   applicantName: string;
   jobTitle: string;
   companyName: string;
@@ -42,16 +52,20 @@ export async function notifyApplicationSubmitted(
       return;
     }
 
+    const safeName = escapeHtml(data.applicantName);
+    const safeTitle = escapeHtml(data.jobTitle);
+    const safeCompany = escapeHtml(data.companyName);
+
     await resend.emails.send({
       from: FROM_EMAIL,
       to: data.applicantEmail,
       subject: `Application Confirmation: ${data.jobTitle} at ${data.companyName}`,
       text: `Hello ${data.applicantName},\n\nYour application for the position of "${data.jobTitle}" at ${data.companyName} has been received successfully.\n\nYou can track the progress of your application anytime in your JobPortal candidate dashboard.\n\nBest regards,\nThe JobPortal Team`,
       html: `
-        <div style="font-family: sans-serif; max-width: 560px; margin: auto; padding: 20px; border: 1px solid #e4e4e7; rounded: 12px;">
+        <div style="font-family: sans-serif; max-width: 560px; margin: auto; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
           <h2 style="color: #18181b; margin-top: 0;">Application Received</h2>
-          <p>Hello <strong>${data.applicantName}</strong>,</p>
-          <p>Your application for <strong>${data.jobTitle}</strong> at <strong>${data.companyName}</strong> has been successfully submitted.</p>
+          <p>Hello <strong>${safeName}</strong>,</p>
+          <p>Your application for <strong>${safeTitle}</strong> at <strong>${safeCompany}</strong> has been successfully submitted.</p>
           <p style="color: #52525b; font-size: 14px;">The employer's hiring team will review your qualifications and reach out if there is a match.</p>
           <div style="margin: 24px 0;">
             <a href="${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/dashboard/applications" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">View Submitted Applications</a>
@@ -67,24 +81,46 @@ export async function notifyApplicationSubmitted(
 }
 
 /**
- * Dispatches notification to the company recruiter when a new application is submitted.
+ * Dispatches notification to the company recruiter(s) when a new application is submitted.
  */
 export async function notifyRecruiterNewApplication(
   data: RecruiterNewApplicantNotification
 ): Promise<void> {
   try {
+    const recipients = Array.isArray(data.recruiterEmail)
+      ? data.recruiterEmail
+      : [data.recruiterEmail];
+
+    if (recipients.length === 0) return;
+
     if (!resend) {
       console.log(
-        `[NOTIFICATION SERVICE] New applicant "${data.applicantName}" for "${data.jobTitle}". Recruiter notification for ${data.recruiterEmail}. (Email skipped: RESEND_API_KEY not configured).`
+        `[NOTIFICATION SERVICE] New applicant "${data.applicantName}" for "${data.jobTitle}". Recruiter notification for ${recipients.join(", ")}. (Email skipped: RESEND_API_KEY not configured).`
       );
       return;
     }
 
+    const safeApplicant = escapeHtml(data.applicantName);
+    const safeTitle = escapeHtml(data.jobTitle);
+    const safeCompany = escapeHtml(data.companyName);
+
     await resend.emails.send({
       from: FROM_EMAIL,
-      to: data.recruiterEmail,
+      to: recipients,
       subject: `New Applicant: ${data.applicantName} for ${data.jobTitle}`,
-      text: `Hello,\n\nA new candidate, ${data.applicantName}, has applied for "${data.jobTitle}".\n\nLog in to your Recruiter Workspace to review their credentials, profile snapshot, and resume.\n\nBest regards,\nJobPortal`,
+      text: `Hello,\n\nA new candidate, ${data.applicantName}, has applied for "${data.jobTitle}" at ${data.companyName}.\n\nLog in to your Recruiter Workspace to review their credentials, profile snapshot, and resume.\n\nBest regards,\nJobPortal`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 560px; margin: auto; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
+          <h2 style="color: #18181b; margin-top: 0;">New Candidate Application</h2>
+          <p>Hello,</p>
+          <p>A new candidate, <strong>${safeApplicant}</strong>, has applied for <strong>${safeTitle}</strong> at <strong>${safeCompany}</strong>.</p>
+          <div style="margin: 24px 0;">
+            <a href="${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/recruiter/dashboard" style="background-color: #2563eb; color: #ffffff; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">Open Recruiter Workspace</a>
+          </div>
+          <hr style="border: none; border-top: 1px solid #e4e4e7; margin: 24px 0;" />
+          <p style="color: #a1a1aa; font-size: 12px; margin-bottom: 0;">JobPortal • Recruiter Notifications</p>
+        </div>
+      `,
     });
   } catch (err) {
     console.warn("[NOTIFICATION SERVICE] Failed to send recruiter new applicant email:", err);
@@ -106,6 +142,11 @@ export async function notifyApplicationStatusChanged(
     }
 
     const formattedStatus = data.newStatus.replace(/_/g, " ");
+    const safeName = escapeHtml(data.applicantName);
+    const safeTitle = escapeHtml(data.jobTitle);
+    const safeCompany = escapeHtml(data.companyName);
+    const safeStatus = escapeHtml(formattedStatus);
+    const safeReason = data.reason ? escapeHtml(data.reason) : null;
 
     await resend.emails.send({
       from: FROM_EMAIL,
@@ -115,16 +156,16 @@ export async function notifyApplicationStatusChanged(
         data.reason ? `\n\nNotes from hiring team: ${data.reason}` : ""
       }\n\nCheck your dashboard for details.\n\nBest regards,\nJobPortal`,
       html: `
-        <div style="font-family: sans-serif; max-width: 560px; margin: auto; padding: 20px; border: 1px solid #e4e4e7; rounded: 12px;">
+        <div style="font-family: sans-serif; max-width: 560px; margin: auto; padding: 20px; border: 1px solid #e4e4e7; border-radius: 12px;">
           <h2 style="color: #18181b; margin-top: 0;">Application Status Updated</h2>
-          <p>Hello <strong>${data.applicantName}</strong>,</p>
-          <p>Your application status for <strong>${data.jobTitle}</strong> at <strong>${data.companyName}</strong> has been updated to:</p>
+          <p>Hello <strong>${safeName}</strong>,</p>
+          <p>Your application status for <strong>${safeTitle}</strong> at <strong>${safeCompany}</strong> has been updated to:</p>
           <div style="display: inline-block; padding: 6px 14px; background: #f4f4f5; border-radius: 6px; font-weight: bold; color: #09090b; font-size: 15px; margin: 8px 0 16px 0;">
-            ${formattedStatus}
+            ${safeStatus}
           </div>
           ${
-            data.reason
-              ? `<div style="background: #fafafa; padding: 12px; border-left: 3px solid #2563eb; margin: 12px 0; font-size: 13px; color: #3f3f46;"><strong>Note from employer:</strong> ${data.reason}</div>`
+            safeReason
+              ? `<div style="background: #fafafa; padding: 12px; border-left: 3px solid #2563eb; margin: 12px 0; font-size: 13px; color: #3f3f46;"><strong>Note from employer:</strong> ${safeReason}</div>`
               : ""
           }
           <div style="margin: 24px 0;">
