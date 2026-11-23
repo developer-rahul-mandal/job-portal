@@ -16,32 +16,81 @@ export default async function RecruiterTeamPage() {
 
   const { company, membership, user } = session;
 
-  const members = await prisma.companyRecruiter.findMany({
-    where: { companyId: company.id },
-    orderBy: [{ membershipRole: "asc" }, { createdAt: "asc" }],
-    include: {
-      user: {
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
+  const [members, invitations, joinRequests] = await Promise.all([
+    prisma.companyRecruiter.findMany({
+      where: { companyId: company.id },
+      orderBy: [{ membershipRole: "asc" }, { createdAt: "asc" }],
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+          },
         },
       },
-    },
-  });
+    }),
+    prisma.companyInvitation.findMany({
+      where: {
+        companyId: company.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.companyJoinRequest.findMany({
+      where: {
+        companyId: company.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    }),
+  ]);
 
   const serializedMembers = members.map((m) => ({
     id: m.id,
     userId: m.userId,
     membershipRole: m.membershipRole,
     status: m.status,
+    verificationStatus: m.verificationStatus,
     createdAt: m.createdAt.toISOString(),
     user: {
       id: m.user.id,
       name: m.user.name,
       email: m.user.email,
       role: m.user.role,
+    },
+  }));
+
+  const serializedInvitations = invitations.map((inv) => ({
+    id: inv.id,
+    email: inv.email,
+    role: inv.role,
+    token: inv.token,
+    status: inv.status,
+    expiresAt: inv.expiresAt.toISOString(),
+    createdAt: inv.createdAt.toISOString(),
+  }));
+
+  const serializedJoinRequests = joinRequests.map((req) => ({
+    id: req.id,
+    userId: req.userId,
+    status: req.status,
+    notes: req.notes,
+    createdAt: req.createdAt.toISOString(),
+    user: {
+      id: req.user.id,
+      name: req.user.name,
+      email: req.user.email,
     },
   }));
 
@@ -59,6 +108,8 @@ export default async function RecruiterTeamPage() {
 
       <TeamManager
         initialMembers={serializedMembers}
+        initialInvitations={serializedInvitations}
+        initialJoinRequests={serializedJoinRequests}
         callerUserId={user.id}
         callerMembershipRole={membership?.membershipRole || "RECRUITER"}
       />

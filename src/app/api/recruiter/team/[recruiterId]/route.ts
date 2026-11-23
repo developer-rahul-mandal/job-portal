@@ -57,31 +57,8 @@ export async function DELETE(
     return errorResponse("Only the company Owner can remove other Administrators.", 403);
   }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.companyRecruiter.delete({
-        where: { id: recruiterId },
-      });
-
-      // Check if user retains another active recruiter membership
-      const remainingActive = await tx.companyRecruiter.findFirst({
-        where: {
-          userId: targetMembership.userId,
-          status: "ACTIVE",
-        },
-      });
-
-      // If user has no other active company memberships and is currently RECRUITER (not ADMIN), revert role to APPLICANT
-      const targetUser = await tx.user.findUnique({
-        where: { id: targetMembership.userId },
-        select: { role: true },
-      });
-
-      if (!remainingActive && targetUser?.role === "RECRUITER") {
-        await tx.user.update({
-          where: { id: targetMembership.userId },
-          data: { role: "APPLICANT" },
-        });
-      }
+    await prisma.companyRecruiter.delete({
+      where: { id: recruiterId },
     });
 
   return NextResponse.json({

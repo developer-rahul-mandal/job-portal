@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
 import { requireRecruiterApi } from "@/lib/auth/recruiter";
 import { prisma } from "@/lib/prisma";
 import { CompanyMembershipRole } from "@/generated/prisma/client";
@@ -9,7 +10,7 @@ function errorResponse(message: string, status: number) {
 
 // ======================================================
 // GET /api/recruiter/team
-// Returns the list of team members for the company
+// Returns the list of team members, pending invitations, and join requests
 // ======================================================
 export async function GET(request: NextRequest) {
   const auth = await requireRecruiterApi(request, { requireCompany: true });
@@ -17,33 +18,71 @@ export async function GET(request: NextRequest) {
 
   const { company } = auth;
 
-  const members = await prisma.companyRecruiter.findMany({
-    where: { companyId: company.id },
-    orderBy: [{ membershipRole: "asc" }, { createdAt: "asc" }],
-    include: {
-      user: {
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          isActive: true,
-          emailVerifiedAt: true,
+  const [members, invitations, joinRequests] = await Promise.all([
+    prisma.companyRecruiter.findMany({
+      where: { companyId: company.id },
+      orderBy: [{ membershipRole: "asc" }, { createdAt: "asc" }],
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            isActive: true,
+            emailVerifiedAt: true,
+          },
         },
       },
-    },
-  });
+    }),
+    prisma.companyInvitation.findMany({
+      where: {
+        companyId: company.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        invitedBy: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    }),
+    prisma.companyJoinRequest.findMany({
+      where: {
+        companyId: company.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    }),
+  ]);
 
   return NextResponse.json({
     success: true,
-    data: members,
+    data: {
+      members,
+      invitations,
+      joinRequests,
+    },
   });
 }
 
 // ======================================================
 // POST /api/recruiter/team
-// Adds / invites an existing registered user to the company recruiter team
-// (Restricted to company Owner or Admin)
+// Creates a secure tokenized invitation for a team member
+// Does NOT mutate global User.role
 // ======================================================
 export async function POST(request: NextRequest) {
   const auth = await requireRecruiterApi(request, {
@@ -52,7 +91,7 @@ export async function POST(request: NextRequest) {
   });
   if (!auth.success) return auth.response;
 
-  const { company, membership: callerMembership } = auth;
+  const { user, company, membership: callerMembership } = auth;
 
   try {
     const body = await request.json();
@@ -78,76 +117,74 @@ export async function POST(request: NextRequest) {
       return errorResponse("Only the company Owner can appoint team Administrators.", 403);
     }
 
-    // Find user by email
-    const targetUser = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-      select: { id: true, name: true, email: true, role: true, isActive: true },
-    });
-
-    if (!targetUser) {
-      return errorResponse(
-        `No registered user found with email "${cleanEmail}". The user must first register an account on JobPortal before joining the team. (Note: External email invitation delivery is currently pending transactional template configuration).`,
-        404
-      );
-    }
-
-    if (!targetUser.isActive) {
-      return errorResponse("This user account is currently deactivated.", 400);
-    }
-
-    // Check if already a member
-    const existingMembership = await prisma.companyRecruiter.findUnique({
+    // Check if target user is already an active member of this company
+    const existingActiveMember = await prisma.companyRecruiter.findFirst({
       where: {
-        userId_companyId: {
-          userId: targetUser.id,
-          companyId: company.id,
-        },
+        companyId: company.id,
+        user: { email: cleanEmail },
+        status: "ACTIVE",
       },
     });
 
-    if (existingMembership) {
-      return errorResponse(`"${cleanEmail}" is already a member of this company team.`, 400);
+    if (existingActiveMember) {
+      return errorResponse(`"${cleanEmail}" is already an active member of this company team.`, 400);
     }
 
-    // Atomically create membership and upgrade target user's role to RECRUITER if needed
-    const newMembership = await prisma.$transaction(async (tx) => {
-      if (targetUser.role === "APPLICANT") {
-        await tx.user.update({
-          where: { id: targetUser.id },
-          data: { role: "RECRUITER" },
-        });
-      }
+    // Check if a pending unexpired invitation already exists for this email
+    const existingPendingInvitation = await prisma.companyInvitation.findFirst({
+      where: {
+        companyId: company.id,
+        email: cleanEmail,
+        status: "PENDING",
+        expiresAt: { gt: new Date() },
+      },
+    });
 
-      return tx.companyRecruiter.create({
-        data: {
-          userId: targetUser.id,
-          companyId: company.id,
-          membershipRole: role,
-          status: "ACTIVE",
+    if (existingPendingInvitation) {
+      return errorResponse(
+        `An active invitation has already been sent to "${cleanEmail}". Token: ${existingPendingInvitation.token}`,
+        400
+      );
+    }
+
+    // Generate cryptographically secure token and 7-day expiration
+    const token = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    const invitation = await prisma.companyInvitation.create({
+      data: {
+        companyId: company.id,
+        email: cleanEmail,
+        role,
+        token,
+        status: "PENDING",
+        invitedById: user.id,
+        expiresAt,
+      },
+      include: {
+        company: {
+          select: { name: true },
         },
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
-            },
-          },
-        },
-      });
+      },
     });
 
     return NextResponse.json(
       {
         success: true,
-        message: `Successfully added ${targetUser.name || cleanEmail} to the recruiter team as ${role}.`,
-        data: newMembership,
+        message: `Invitation generated for ${cleanEmail} as ${role}.`,
+        data: {
+          invitationId: invitation.id,
+          email: invitation.email,
+          role: invitation.role,
+          token: invitation.token,
+          inviteUrl: `/invite/${invitation.token}`,
+          expiresAt: invitation.expiresAt,
+        },
       },
       { status: 201 }
     );
   } catch (err) {
     console.error("POST_RECRUITER_TEAM_ERROR:", err);
-    return errorResponse("Failed to add team member.", 500);
+    return errorResponse("Failed to create team invitation.", 500);
   }
 }
